@@ -1,0 +1,38 @@
+from serdde.json import dumps
+from serdde.json import loads
+from serdde.macros import Serde
+
+
+@derive(Serde)
+@Serde(rename_all="camelCase", deny_unknown_fields=True)
+class EditorUser:
+    user_id: u64
+
+    @Serde(alias=["name"])
+    display_name: str
+
+
+@derive(Serde)
+enum EditorEvent:
+    Quit
+    UserChanged:
+        user: EditorUser
+
+
+def main() -> i32:
+    event = EditorEvent.UserChanged(
+        user=EditorUser(user_id=7, display_name="Ada"),
+    )
+    encoded = dumps(event)
+    if not encoded.ok:
+        return 1
+    decoded = loads[EditorEvent](encoded.value)
+    if not decoded.ok:
+        return 2
+    match decoded.value:
+        case EditorEvent.UserChanged(user):
+            if user.user_id != 7:
+                return 3
+        case _:
+            return 4
+    return 0

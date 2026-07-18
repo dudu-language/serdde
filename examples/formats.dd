@@ -1,0 +1,34 @@
+from serdde.dson import dumps as dumps_dson
+from serdde.dson import loads as loads_dson
+from serdde.json import dumps as dumps_json
+from serdde.json import loads as loads_json
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Point:
+    x: f64
+    y: f64
+
+
+def main() -> i32:
+    point = Point(x=1.25, y=-4.5)
+    json = dumps_json(point)
+    dson = dumps_dson(point)
+    match json:
+        case Err(_):
+            return 1
+        case Ok(text):
+            print("JSON: " + text)
+            restored = loads_json[Point](text)
+            if not restored.ok:
+                return 2
+    match dson:
+        case Err(_):
+            return 3
+        case Ok(text):
+            print("DSON: " + text)
+            restored = loads_dson[Point](text)
+            if not restored.ok:
+                return 4
+    return 0

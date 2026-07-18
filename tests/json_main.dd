@@ -214,15 +214,18 @@ def main() -> i32:
         case Err(_):
             return fail("typed write", 35)
         case Ok(text):
+            expected = "{\"name\":\"Ada\",\"active\":true,\"address\":{\"city\":\"London\",\"postal_code\":42},\"scores\":[2,3,5]}"
+            if text != expected:
+                return fail("typed golden output", 36)
             decoded = loads[JsonRecord](text)
             match decoded:
                 case Err(_):
-                    return fail("typed read", 36)
+                    return fail("typed read", 37)
                 case Ok(value):
                     if value.name != "Ada" or value.address.postal_code != 42:
-                        return fail("typed roundtrip", 37)
+                        return fail("typed roundtrip", 38)
                     if len(value.scores) != 3 or value.scores[2] != 5:
-                        return fail("typed list roundtrip", 38)
+                        return fail("typed list roundtrip", 39)
 
     depth_ok: str = ""
     i: i32 = 0
@@ -235,8 +238,8 @@ def main() -> i32:
         depth_ok += "]"
         i += 1
     if rejected(depth_ok):
-        return fail("depth boundary", 39)
+        return fail("depth boundary", 40)
     if not rejected("[" + depth_ok + "]"):
-        return fail("depth limit", 40)
+        return fail("depth limit", 41)
 
     return 0

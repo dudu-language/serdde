@@ -1,0 +1,41 @@
+from serdde.error import SerddeError
+from serdde.json import dumps
+from serdde.json import loads
+from serdde.macros import Serde
+
+
+def empty_score(value: i32) -> bool:
+    return value == 0
+
+
+@derive(Serde)
+@Serde(rename_all="camelCase", deny_unknown_fields=True)
+class Account:
+    account_id: u64
+
+    @Serde(rename="displayName", alias=["name"])
+    display_name: str
+
+    @Serde(default=True)
+    enabled: bool
+
+    @Serde(skip_if="empty_score")
+    score: i32
+
+
+def main() -> i32:
+    source = "{\"accountId\":7,\"name\":\"Ada\",\"score\":0}"
+    decoded = loads[Account](source)
+    match decoded:
+        case Err(error):
+            print(error.path_string() + ": " + error.message)
+            return 1
+        case Ok(account):
+            encoded = dumps(account)
+            match encoded:
+                case Err(error):
+                    print(error.message)
+                    return 2
+                case Ok(text):
+                    print(text)
+    return 0

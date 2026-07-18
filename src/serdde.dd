@@ -4,8 +4,5 @@ from serdde.error import PathSegment
 from serdde.error import SerddeError
 from serdde.json import dumps_value
 from serdde.json import loads
-from serdde.macros import Deserialize
-from serdde.macros import Serde
-from serdde.macros import Serialize
 from serdde.value import Value
 from serdde.value import ValueKind

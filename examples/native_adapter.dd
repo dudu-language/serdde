@@ -1,0 +1,58 @@
+from cpp import string
+from cpp import utility
+from serdde.convert import decode_i32
+from serdde.convert import decode_str
+from serdde.error import SerddeError
+from serdde.error import type_error
+from serdde.json import dumps
+from serdde.json import loads
+from serdde.macros import Serde
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import empty_object_value
+from serdde.value import i64_value
+from serdde.value import string_value
+
+
+class PairSerde:
+    def serialize(
+        value: &const[std.pair[std.string, i32]],
+    ) -> Result[Value, SerddeError]:
+        output = empty_object_value()
+        output.set_field("name", string_value(value.first))
+        output.set_field("score", i64_value(i64(value.second)))
+        return Ok(output)
+
+    def deserialize(
+        value: &const[Value],
+    ) -> Result[std.pair[std.string, i32], SerddeError]:
+        if value.kind != ValueKind.Object:
+            return Err(type_error("expected pair object"))
+        name = decode_str(value.field("name"))
+        score = decode_i32(value.field("score"))
+        if not name.ok:
+            return Err(name.err.at_field("name"))
+        if not score.ok:
+            return Err(score.err.at_field("score"))
+        return Ok(std.make_pair(std.string(name.value), score.value))
+
+
+@derive(Serde)
+class NativeRecord:
+    @Serde(adapter="PairSerde")
+    entry: std.pair[std.string, i32]
+
+
+def main() -> i32:
+    source = NativeRecord(entry=std.make_pair(std.string("Ada"), 42))
+    encoded = dumps(source)
+    match encoded:
+        case Err(error):
+            print(error.message)
+            return 1
+        case Ok(text):
+            print(text)
+            decoded = loads[NativeRecord](text)
+            if not decoded.ok:
+                return 2
+    return 0

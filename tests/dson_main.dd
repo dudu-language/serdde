@@ -75,15 +75,18 @@ def main() -> i32:
         case Err(_):
             return fail("typed write", 7)
         case Ok(text):
+            expected = "obj(3:{str(2:id)=u64(7),str(4:name)=str(3:Ada),str(7:samples)=seq(3:[f64(1.0),f64(2.5),f64(4.0)])})"
+            if text != expected:
+                return fail("typed golden output", 8)
             decoded = loads[DsonRecord](text)
             match decoded:
                 case Err(_):
-                    return fail("typed read", 8)
+                    return fail("typed read", 9)
                 case Ok(value):
                     if value.id != 7 or value.name != "Ada":
-                        return fail("typed fields", 9)
+                        return fail("typed fields", 10)
                     if len(value.samples) != 3 or value.samples[1] != 2.5:
-                        return fail("typed list", 10)
+                        return fail("typed list", 11)
 
     invalid: list[str] = [
         "bool(maybe)",
@@ -99,18 +102,18 @@ def main() -> i32:
     ]
     for text in invalid:
         if not rejected(text):
-            return fail("invalid input", 11)
+            return fail("invalid input", 12)
 
     mismatch = loads[DsonRecord](
         "obj(3:{str(2:id)=u64(7),str(4:name)=str(3:Ada),str(7:samples)=str(3:bad)})",
     )
     match mismatch:
         case Ok(_):
-            return fail("typed mismatch", 12)
+            return fail("typed mismatch", 13)
         case Err(error):
             if error.path_string() != "$.samples":
-                return fail("typed mismatch path", 13)
+                return fail("typed mismatch path", 14)
             if error.format != "dson" or error.offset == 0:
-                return fail("typed mismatch location", 14)
+                return fail("typed mismatch location", 15)
 
     return 0

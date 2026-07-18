@@ -1,0 +1,29 @@
+from serdde.json import dumps
+from serdde.json import loads
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Player:
+    id: u64
+    name: str
+    scores: list[i32]
+
+
+def main() -> i32:
+    player = Player(id=7, name="Ada", scores=[2, 3, 5])
+    encoded = dumps(player)
+    match encoded:
+        case Err(error):
+            print(error.message)
+            return 1
+        case Ok(text):
+            print(text)
+            decoded = loads[Player](text)
+            match decoded:
+                case Err(error):
+                    print(error.message)
+                    return 2
+                case Ok(value):
+                    print(value.name)
+    return 0

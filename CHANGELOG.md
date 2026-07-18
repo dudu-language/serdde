@@ -41,3 +41,7 @@ All notable changes to Serdde are recorded here. The format follows
   macro expansion with a source diagnostic.
 - Fixed-array derive coverage exercises ranks two through four through the same
   recursive codec generator.
+- Executable examples cover basic JSON use, configuration, multiple formats,
+  editor integration, and explicit adapters for imported C++ types.
+- Package documentation covers the API, schema evolution, generated code,
+  editor behavior, DSON, architecture, configuration, and benchmarks.

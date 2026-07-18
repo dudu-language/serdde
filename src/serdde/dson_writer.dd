@@ -1,0 +1,93 @@
+from cpp.path import json_native.hpp
+from serdde.error import SerddeError
+from serdde.error import type_error
+from serdde.value import Value
+from serdde.value import ValueKind
+
+
+def write_dson_value(output: &str, value: &const[Value]) -> Result[bool, SerddeError]:
+    match value.kind:
+        case ValueKind.Null:
+            output += "null"
+        case ValueKind.Bool:
+            if value.bool_value:
+                output += "bool(true)"
+            else:
+                output += "bool(false)"
+        case ValueKind.I64:
+            output += "i64("
+            output += str(value.i64_value)
+            output += ")"
+        case ValueKind.U64:
+            output += "u64("
+            output += str(value.u64_value)
+            output += ")"
+        case ValueKind.F64:
+            if not serdde_json_native.finite_f64(value.f64_value):
+                return Err(type_error("DSON cannot encode a non-finite float"))
+            encoded = serdde_json_native.format_f64(value.f64_value)
+            if encoded == "":
+                return Err(type_error("failed to format floating-point value"))
+            output += "f64("
+            output += encoded
+            output += ")"
+        case ValueKind.String:
+            if not serdde_json_native.valid_utf8(value.string_value):
+                return Err(type_error("string is not valid UTF-8"))
+            output += "str("
+            output += str(len(value.string_value))
+            output += ":"
+            output += value.string_value
+            output += ")"
+        case ValueKind.Sequence:
+            output += "seq("
+            output += str(len(value.sequence_value))
+            output += ":["
+            i: usize = 0
+            while i < len(value.sequence_value):
+                if i > 0:
+                    output += ","
+                child = write_dson_value(output, value.sequence_value[i])
+                match child:
+                    case Err(error):
+                        return Err(error.at_index(i))
+                    case Ok(_):
+                        pass
+                i += 1
+            output += "])"
+        case ValueKind.Object:
+            output += "obj("
+            output += str(len(value.object_order))
+            output += ":{"
+            i: usize = 0
+            while i < len(value.object_order):
+                if i > 0:
+                    output += ","
+                key = value.object_order[i]
+                key_value = Value(kind=ValueKind.String, string_value=key)
+                encoded_key = write_dson_value(output, key_value)
+                match encoded_key:
+                    case Err(error):
+                        return Err(error.at_field(key))
+                    case Ok(_):
+                        pass
+                output += "="
+                child = write_dson_value(output, value.object_value.at(key))
+                match child:
+                    case Err(error):
+                        return Err(error.at_field(key))
+                    case Ok(_):
+                        pass
+                i += 1
+            output += "})"
+    return Ok(True)
+
+
+def write_dson(value: &const[Value]) -> Result[str, SerddeError]:
+    output: str = ""
+    result = write_dson_value(output, value)
+    match result:
+        case Err(error):
+            return Err(error)
+        case Ok(_):
+            return Ok(output)

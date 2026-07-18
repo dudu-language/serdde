@@ -1,0 +1,116 @@
+from serdde.dson import dumps
+from serdde.dson import dumps_value
+from serdde.dson import loads
+from serdde.dson_parser import parse_dson
+from serdde.macros import Serde
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import bool_value
+from serdde.value import empty_object_value
+from serdde.value import f64_value
+from serdde.value import i64_value
+from serdde.value import sequence_value
+from serdde.value import string_value
+from serdde.value import u64_value
+
+
+@derive(Serde)
+class DsonRecord:
+    id: u64
+    name: str
+    samples: list[f64]
+
+
+def rejected(source: str) -> bool:
+    result = parse_dson(source)
+    match result:
+        case Ok(_):
+            return False
+        case Err(_):
+            return True
+
+
+def fail(name: str, code: i32) -> i32:
+    print("dson test failed: " + name)
+    return code
+
+
+def main() -> i32:
+    root = empty_object_value()
+    root.set_field("null", Value())
+    root.set_field("bool", bool_value(True))
+    root.set_field("signed", i64_value(-42))
+    root.set_field("unsigned", u64_value(u64(0xffffffffffffffff)))
+    root.set_field("float", f64_value(1.25))
+    root.set_field("text", string_value("Dudu (typed): snow"))
+    root.set_field(
+        "items",
+        sequence_value([i64_value(1), u64_value(2), f64_value(3.0)]),
+    )
+
+    encoded = dumps_value(root)
+    source: str = ""
+    match encoded:
+        case Err(_):
+            return fail("value write", 1)
+        case Ok(text):
+            source = text
+    parsed = parse_dson(source)
+    match parsed:
+        case Err(_):
+            return fail("value read", 2)
+        case Ok(value):
+            if value.field("signed").kind != ValueKind.I64:
+                return fail("signed kind", 3)
+            if value.field("unsigned").kind != ValueKind.U64:
+                return fail("unsigned kind", 4)
+            if value.field("float").kind != ValueKind.F64:
+                return fail("float kind", 5)
+            if value.field("items").sequence_value[2].kind != ValueKind.F64:
+                return fail("nested float kind", 6)
+
+    record = DsonRecord(id=7, name="Ada", samples=[1.0, 2.5, 4.0])
+    record_text = dumps(record)
+    match record_text:
+        case Err(_):
+            return fail("typed write", 7)
+        case Ok(text):
+            decoded = loads[DsonRecord](text)
+            match decoded:
+                case Err(_):
+                    return fail("typed read", 8)
+                case Ok(value):
+                    if value.id != 7 or value.name != "Ada":
+                        return fail("typed fields", 9)
+                    if len(value.samples) != 3 or value.samples[1] != 2.5:
+                        return fail("typed list", 10)
+
+    invalid: list[str] = [
+        "bool(maybe)",
+        "i64(9223372036854775808)",
+        "u64(-1)",
+        "f64(inf)",
+        "str(4:abc)",
+        "seq(2:[i64(1)])",
+        "seq(1:[i64(1),i64(2)])",
+        "obj(1:{str(1:a)=i64(1),str(1:b)=i64(2)})",
+        "obj(2:{str(1:a)=i64(1),str(1:a)=i64(2)})",
+        "null trailing",
+    ]
+    for text in invalid:
+        if not rejected(text):
+            return fail("invalid input", 11)
+
+    mismatch = loads[DsonRecord](
+        "obj(3:{str(2:id)=u64(7),str(4:name)=str(3:Ada),str(7:samples)=str(3:bad)})",
+    )
+    match mismatch:
+        case Ok(_):
+            return fail("typed mismatch", 12)
+        case Err(error):
+            if error.path_string() != "$.samples":
+                return fail("typed mismatch path", 13)
+            if error.format != "dson" or error.offset == 0:
+                return fail("typed mismatch location", 14)
+
+    return 0

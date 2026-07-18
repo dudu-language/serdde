@@ -1,18 +1,18 @@
 from serdde.convert import from_value
 from serdde.convert import to_value
+from serdde.dson_parser import parse_dson
+from serdde.dson_writer import write_dson
 from serdde.error import SerddeError
 from serdde.format_support import conversion_error
-from serdde.json_parser import parse_json
-from serdde.json_writer import write_json
 from serdde.value import Value
 
 
 def loads(source: str) -> Result[Value, SerddeError]:
-    return parse_json(source)
+    return parse_dson(source)
 
 
 def loads[T](source: str) -> Result[T, SerddeError]:
-    parsed = parse_json(source)
+    parsed = parse_dson(source)
     match parsed:
         case Err(error):
             return Err(error)
@@ -20,16 +20,16 @@ def loads[T](source: str) -> Result[T, SerddeError]:
             decoded = from_value[T](value)
             match decoded:
                 case Err(error):
-                    return Err(conversion_error("json", error, value))
+                    return Err(conversion_error("dson", error, value))
                 case Ok(ready):
                     return Ok(ready)
 
 
 def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
-    encoded = write_json(value)
+    encoded = write_dson(value)
     match encoded:
         case Err(error):
-            return Err(error.with_format("json"))
+            return Err(error.with_format("dson"))
         case Ok(text):
             return Ok(text)
 
@@ -38,6 +38,6 @@ def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
     converted = to_value(value)
     match converted:
         case Err(error):
-            return Err(error.with_format("json"))
+            return Err(error.with_format("dson"))
         case Ok(ready):
             return dumps_value(ready)

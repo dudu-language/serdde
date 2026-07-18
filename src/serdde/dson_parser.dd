@@ -1,0 +1,351 @@
+from cpp.path import json_native.hpp
+from serdde.error import SerddeError
+from serdde.error import syntax_error
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import bool_value
+from serdde.value import empty_object_value
+from serdde.value import f64_value
+from serdde.value import i64_value
+from serdde.value import null_value
+from serdde.value import sequence_value
+from serdde.value import string_value
+from serdde.value import u64_value
+
+
+class DsonParser:
+    source: str
+    offset: usize = 0
+    line: usize = 1
+    column: usize = 1
+
+    def done(self) -> bool:
+        return self.offset >= len(self.source)
+
+    def peek(self) -> char:
+        if self.done():
+            return char(0)
+        return self.source[self.offset]
+
+    def advance(self) -> char:
+        value = self.peek()
+        if self.done():
+            return value
+        self.offset += 1
+        if value == char(10):
+            self.line += 1
+            self.column = 1
+        else:
+            self.column += 1
+        return value
+
+    def fail(self, message: str) -> SerddeError:
+        return syntax_error(message, self.line, self.column, self.offset).with_format("dson")
+
+    def skip_space(self):
+        while not self.done():
+            value = self.peek()
+            if value != char(32) and value != char(9) and value != char(10) and value != char(13):
+                return
+            self.advance()
+
+    def consume(self, expected: char) -> Result[bool, SerddeError]:
+        if self.peek() != expected:
+            return Err(self.fail("unexpected character"))
+        self.advance()
+        return Ok(True)
+
+    def consume_word(self, word: str) -> Result[bool, SerddeError]:
+        i: usize = 0
+        while i < len(word):
+            if self.done() or self.peek() != word[i]:
+                return Err(self.fail("invalid DSON tag"))
+            self.advance()
+            i += 1
+        return Ok(True)
+
+    def natural(self) -> Result[usize, SerddeError]:
+        start = self.offset
+        while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
+            self.advance()
+        if self.offset == start:
+            return Err(self.fail("expected a non-negative integer"))
+        text: str = ""
+        i = start
+        while i < self.offset:
+            text += self.source[i]
+            i += 1
+        parsed: u64 = 0
+        if not serdde_json_native.parse_u64(text, &parsed):
+            return Err(self.fail("integer is out of range"))
+        return Ok(usize(parsed))
+
+    def text_until_close(self) -> Result[str, SerddeError]:
+        output: str = ""
+        while not self.done() and self.peek() != char(41):
+            output += self.advance()
+        if self.done():
+            return Err(self.fail("unterminated numeric value"))
+        return Ok(output)
+
+    def string(self) -> Result[Value, SerddeError]:
+        tag = self.consume_word("str(")
+        match tag:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                pass
+        length_result = self.natural()
+        length: usize = 0
+        match length_result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                length = value
+        colon = self.consume(char(58))
+        match colon:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                pass
+        if length > len(self.source) - self.offset:
+            return Err(self.fail("string length exceeds remaining input"))
+        output: str = ""
+        i: usize = 0
+        while i < length:
+            output += self.advance()
+            i += 1
+        if not serdde_json_native.valid_utf8(output):
+            return Err(self.fail("string is not valid UTF-8"))
+        close = self.consume(char(41))
+        match close:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                return Ok(string_value(output))
+
+    def signed(self) -> Result[Value, SerddeError]:
+        self.consume_word("i64(")
+        text_result = self.text_until_close()
+        text: str = ""
+        match text_result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                text = value
+        parsed: i64 = 0
+        if not serdde_json_native.parse_i64(text, &parsed):
+            return Err(self.fail("invalid i64 value"))
+        self.advance()
+        return Ok(i64_value(parsed))
+
+    def unsigned(self) -> Result[Value, SerddeError]:
+        self.consume_word("u64(")
+        text_result = self.text_until_close()
+        text: str = ""
+        match text_result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                text = value
+        parsed: u64 = 0
+        if not serdde_json_native.parse_u64(text, &parsed):
+            return Err(self.fail("invalid u64 value"))
+        self.advance()
+        return Ok(u64_value(parsed))
+
+    def floating(self) -> Result[Value, SerddeError]:
+        self.consume_word("f64(")
+        text_result = self.text_until_close()
+        text: str = ""
+        match text_result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                text = value
+        parsed: f64 = 0.0
+        if not serdde_json_native.parse_f64(text, &parsed):
+            return Err(self.fail("invalid f64 value"))
+        self.advance()
+        return Ok(f64_value(parsed))
+
+    def boolean(self) -> Result[Value, SerddeError]:
+        tag = self.consume_word("bool(")
+        match tag:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                pass
+        if self.peek() == char(116):
+            word = self.consume_word("true)")
+            match word:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    return Ok(bool_value(True))
+        word = self.consume_word("false)")
+        match word:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                return Ok(bool_value(False))
+
+    def sequence(self, depth: usize) -> Result[Value, SerddeError]:
+        if depth >= 128:
+            return Err(self.fail("DSON nesting depth exceeds 128"))
+        self.consume_word("seq(")
+        count_result = self.natural()
+        count: usize = 0
+        match count_result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                count = value
+        if self.peek() != char(58):
+            return Err(self.fail("expected sequence count separator"))
+        self.advance()
+        if self.peek() != char(91):
+            return Err(self.fail("expected sequence body"))
+        self.advance()
+        output: list[Value] = []
+        i: usize = 0
+        while i < count:
+            self.skip_space()
+            item = self.value(depth + 1)
+            match item:
+                case Err(error):
+                    return Err(error)
+                case Ok(value):
+                    output.append(value)
+            self.skip_space()
+            i += 1
+            if i < count:
+                comma = self.consume(char(44))
+                match comma:
+                    case Err(error):
+                        return Err(error)
+                    case Ok(_):
+                        pass
+        if self.peek() != char(93):
+            return Err(self.fail("sequence count does not match its body"))
+        self.advance()
+        close = self.consume(char(41))
+        match close:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                return Ok(sequence_value(output))
+
+    def object(self, depth: usize) -> Result[Value, SerddeError]:
+        if depth >= 128:
+            return Err(self.fail("DSON nesting depth exceeds 128"))
+        self.consume_word("obj(")
+        count_result = self.natural()
+        count: usize = 0
+        match count_result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                count = value
+        if self.peek() != char(58):
+            return Err(self.fail("expected object count separator"))
+        self.advance()
+        if self.peek() != char(123):
+            return Err(self.fail("expected object body"))
+        self.advance()
+        output = empty_object_value()
+        i: usize = 0
+        while i < count:
+            self.skip_space()
+            key_result = self.string()
+            key: str = ""
+            match key_result:
+                case Err(error):
+                    return Err(error)
+                case Ok(value):
+                    key = value.string_value
+            if output.has_field(key):
+                return Err(self.fail("duplicate object key"))
+            self.skip_space()
+            equals = self.consume(char(61))
+            match equals:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    pass
+            self.skip_space()
+            item = self.value(depth + 1)
+            match item:
+                case Err(error):
+                    return Err(error)
+                case Ok(value):
+                    output.set_field(key, value)
+            self.skip_space()
+            i += 1
+            if i < count:
+                comma = self.consume(char(44))
+                match comma:
+                    case Err(error):
+                        return Err(error)
+                    case Ok(_):
+                        pass
+        if self.peek() != char(125):
+            return Err(self.fail("object count does not match its body"))
+        self.advance()
+        close = self.consume(char(41))
+        match close:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                return Ok(output)
+
+    def value(self, depth: usize) -> Result[Value, SerddeError]:
+        self.skip_space()
+        if self.done():
+            return Err(self.fail("expected a DSON value"))
+        start_line = self.line
+        start_column = self.column
+        start_offset = self.offset
+        result: Result[Value, SerddeError]
+        lead = self.peek()
+        if lead == char(110):
+            word = self.consume_word("null")
+            match word:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    result = Ok(null_value())
+        elif lead == char(98):
+            result = self.boolean()
+        elif lead == char(105):
+            result = self.signed()
+        elif lead == char(117):
+            result = self.unsigned()
+        elif lead == char(102):
+            result = self.floating()
+        elif lead == char(115) and self.offset + 3 < len(self.source) and self.source[self.offset + 1] == char(116):
+            result = self.string()
+        elif lead == char(115):
+            result = self.sequence(depth)
+        elif lead == char(111):
+            result = self.object(depth)
+        else:
+            return Err(self.fail("unknown DSON value tag"))
+        match result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                return Ok(value.with_source(start_line, start_column, start_offset))
+
+
+def parse_dson(source: str) -> Result[Value, SerddeError]:
+    parser = DsonParser(source=source)
+    result = parser.value(0)
+    match result:
+        case Err(error):
+            return Err(error)
+        case Ok(value):
+            parser.skip_space()
+            if not parser.done():
+                return Err(parser.fail("trailing characters after DSON value"))
+            return Ok(value)

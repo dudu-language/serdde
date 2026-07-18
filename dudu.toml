@@ -38,3 +38,7 @@ kind = "executable"
 [targets.json]
 entry = "tests/json_main.dd"
 kind = "executable"
+
+[targets.dson]
+entry = "tests/dson_main.dd"
+kind = "executable"

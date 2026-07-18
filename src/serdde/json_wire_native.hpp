@@ -97,14 +97,16 @@ inline bool validate_json_tree(yyjson_val *value, std::size_t depth,
 }
 
 struct JsonDocument {
-  std::string source;
+  std::string_view source;
   yyjson_doc *document = nullptr;
   std::string error;
   std::size_t error_offset = 0;
 
-  explicit JsonDocument(std::string input) : source(std::move(input)) {
+  explicit JsonDocument(const std::string &input) : source(input) {
     yyjson_read_err parse_error{};
-    document = yyjson_read_opts(source.data(), source.size(),
+    // yyjson accepts mutable storage because its optional in-situ mode edits
+    // the input. YYJSON_READ_NOFLAG guarantees that this buffer is read-only.
+    document = yyjson_read_opts(const_cast<char *>(source.data()), source.size(),
                                 YYJSON_READ_NOFLAG, nullptr, &parse_error);
     if (document == nullptr) {
       error = parse_error.msg == nullptr ? "invalid JSON" : parse_error.msg;
@@ -152,9 +154,16 @@ struct JsonDocument {
 
 class JsonWriter {
 public:
+  JsonWriter() : output_(&owned_output_) {}
+  explicit JsonWriter(std::string &output) : output_(&output) {
+    output.clear();
+  }
+
   std::string format_name() const { return "json"; }
   std::string error_message() const { return error_; }
-  std::string output() const { return output_; }
+  std::string output() const { return *output_; }
+  std::string take_output() { return std::move(*output_); }
+  void reserve(std::size_t size) { output_->reserve(size); }
 
   bool write_null() { return scalar("null"); }
   bool write_bool(bool value) { return scalar(value ? "true" : "false"); }
@@ -189,9 +198,9 @@ public:
     }
     const std::string_view spelling(buffer,
                                     static_cast<std::size_t>(end - buffer));
-    output_ += spelling;
+    *output_ += spelling;
     if (spelling.find_first_of(".eE") == std::string_view::npos) {
-      output_ += ".0";
+      *output_ += ".0";
     }
     return true;
   }
@@ -200,7 +209,7 @@ public:
     if (!before_value()) {
       return false;
     }
-    return detail::append_escaped_json(output_, value);
+    return detail::append_escaped_json(*output_, value);
   }
 
   bool begin_sequence(std::size_t) { return begin('[', FrameKind::Sequence); }
@@ -227,7 +236,7 @@ public:
       return fail("object field is missing its value");
     }
     if (frame.reject_duplicate_fields) {
-      for (const auto [offset, length] : frame.field_ranges) {
+      for (const auto &[offset, length] : frame.field_ranges) {
         if (length == name.size() &&
             frame.field_names.compare(offset, length, name) == 0) {
           return fail("duplicate object field: " + name);
@@ -237,11 +246,11 @@ public:
       frame.field_names += name;
     }
     if (!frame.first) {
-      output_.push_back(',');
+      output_->push_back(',');
     }
     frame.first = false;
-    detail::append_escaped_json(output_, name);
-    output_.push_back(':');
+    detail::append_escaped_json(*output_, name);
+    output_->push_back(':');
     frame.expecting_value = true;
     return true;
   }
@@ -252,6 +261,8 @@ public:
 private:
   enum class FrameKind { Sequence, Object };
   struct Frame {
+    explicit Frame(FrameKind frame_kind) : kind(frame_kind) {}
+
     FrameKind kind;
     bool first = true;
     bool expecting_value = false;
@@ -260,7 +271,8 @@ private:
     std::vector<std::pair<std::size_t, std::size_t>> field_ranges;
   };
 
-  std::string output_;
+  std::string owned_output_;
+  std::string *output_;
   std::vector<Frame> frames_;
   std::string error_;
   bool wrote_root_ = false;
@@ -287,7 +299,7 @@ private:
       return true;
     }
     if (!frame.first) {
-      output_.push_back(',');
+      output_->push_back(',');
     }
     frame.first = false;
     return true;
@@ -297,7 +309,7 @@ private:
     if (!before_value()) {
       return false;
     }
-    output_ += spelling;
+    *output_ += spelling;
     return true;
   }
 
@@ -305,7 +317,7 @@ private:
     if (!before_value()) {
       return false;
     }
-    output_.push_back(spelling);
+    output_->push_back(spelling);
     frames_.push_back(Frame{kind});
     return true;
   }
@@ -318,7 +330,7 @@ private:
       return fail("object field is missing its value");
     }
     frames_.pop_back();
-    output_.push_back(spelling);
+    output_->push_back(spelling);
     return true;
   }
 };

@@ -1,6 +1,7 @@
 from cpp.path import json_test_native.hpp
 from serdde.error import ErrorKind
 from serdde.json import dumps
+from serdde.json import dumps_into
 from serdde.json import dumps_value
 from serdde.json import loads
 from serdde.json_parser import parse_json
@@ -227,6 +228,16 @@ def main() -> i32:
                     if len(value.scores) != 3 or value.scores[2] != 5:
                         return fail("typed list roundtrip", 39)
 
+    destination = "capacity retained across writes"
+    reused = dumps_into(record, destination)
+    match reused:
+        case Err(_):
+            return fail("typed reusable write", 40)
+        case Ok(_):
+            expected = "{\"name\":\"Ada\",\"active\":true,\"address\":{\"city\":\"London\",\"postal_code\":42},\"scores\":[2,3,5]}"
+            if destination != expected:
+                return fail("typed reusable output", 41)
+
     depth_ok: str = ""
     i: i32 = 0
     while i < 128:
@@ -238,8 +249,8 @@ def main() -> i32:
         depth_ok += "]"
         i += 1
     if rejected(depth_ok):
-        return fail("depth boundary", 40)
+        return fail("depth boundary", 42)
     if not rejected("[" + depth_ok + "]"):
-        return fail("depth limit", 41)
+        return fail("depth limit", 43)
 
     return 0

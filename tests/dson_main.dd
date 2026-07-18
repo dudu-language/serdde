@@ -1,4 +1,5 @@
 from serdde.dson import dumps
+from serdde.dson import dumps_into
 from serdde.dson import dumps_value
 from serdde.dson import loads
 from serdde.dson_parser import parse_dson
@@ -88,6 +89,16 @@ def main() -> i32:
                     if len(value.samples) != 3 or value.samples[1] != 2.5:
                         return fail("typed list", 11)
 
+    destination = "capacity retained across writes"
+    reused = dumps_into(record, destination)
+    match reused:
+        case Err(_):
+            return fail("typed reusable write", 12)
+        case Ok(_):
+            expected = "obj(3:{str(2:id)=u64(7),str(4:name)=str(3:Ada),str(7:samples)=seq(3:[f64(1.0),f64(2.5),f64(4.0)])})"
+            if destination != expected:
+                return fail("typed reusable output", 13)
+
     invalid: list[str] = [
         "bool(maybe)",
         "i64(9223372036854775808)",
@@ -102,18 +113,18 @@ def main() -> i32:
     ]
     for text in invalid:
         if not rejected(text):
-            return fail("invalid input", 12)
+            return fail("invalid input", 14)
 
     mismatch = loads[DsonRecord](
         "obj(3:{str(2:id)=u64(7),str(4:name)=str(3:Ada),str(7:samples)=str(3:bad)})",
     )
     match mismatch:
         case Ok(_):
-            return fail("typed mismatch", 13)
+            return fail("typed mismatch", 15)
         case Err(error):
             if error.path_string() != "$.samples":
-                return fail("typed mismatch path", 14)
+                return fail("typed mismatch path", 16)
             if error.format != "dson" or error.offset == 0:
-                return fail("typed mismatch location", 15)
+                return fail("typed mismatch location", 17)
 
     return 0

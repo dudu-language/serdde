@@ -13,7 +13,7 @@ def loads(source: str) -> Result[Value, SerddeError]:
     return parse_dson(source)
 
 
-def loads[T](source: str) -> Result[T, SerddeError]:
+def loads[T](source: &const[str]) -> Result[T, SerddeError]:
     input = serdde_wire.DsonReader(source)
     if not input.valid():
         return Err(syntax_error(
@@ -39,4 +39,15 @@ def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
     encoded = serialize_to(value, output)
     if not encoded.ok:
         return Err(encoded.err.with_format("dson"))
-    return Ok(output.output())
+    return Ok(output.take_output())
+
+
+def dumps_into[T](
+    value: &const[T],
+    destination: &str,
+) -> Result[bool, SerddeError]:
+    output = serdde_wire.DsonWriter(destination)
+    encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("dson"))
+    return Ok(True)

@@ -14,9 +14,16 @@ namespace serdde_wire {
 
 class DsonWriter {
 public:
+  DsonWriter() : output_(&owned_output_) {}
+  explicit DsonWriter(std::string &output) : output_(&output) {
+    output.clear();
+  }
+
   std::string format_name() const { return "dson"; }
   std::string error_message() const { return error_; }
-  std::string output() const { return output_; }
+  std::string output() const { return *output_; }
+  std::string take_output() { return std::move(*output_); }
+  void reserve(std::size_t size) { output_->reserve(size); }
 
   bool write_null() { return scalar("null"); }
   bool write_bool(bool value) {
@@ -36,9 +43,9 @@ public:
     if (!before_value()) {
       return false;
     }
-    output_ += "f64(";
-    output_ += spelling;
-    output_.push_back(')');
+    *output_ += "f64(";
+    *output_ += spelling;
+    output_->push_back(')');
     return true;
   }
 
@@ -57,9 +64,9 @@ public:
     if (!before_value()) {
       return false;
     }
-    output_ += "seq(";
+    *output_ += "seq(";
     append_size(size);
-    output_ += ":[";
+    *output_ += ":[";
     frames_.push_back(Frame{FrameKind::Sequence});
     return true;
   }
@@ -81,11 +88,11 @@ public:
       return fail("duplicate object field: " + name);
     }
     if (!frame.first) {
-      output_.push_back(',');
+      output_->push_back(',');
     }
     frame.first = false;
     append_string(name);
-    output_.push_back('=');
+    output_->push_back('=');
     frame.expecting_value = true;
     return true;
   }
@@ -96,6 +103,8 @@ public:
 private:
   enum class FrameKind { Sequence, Object };
   struct Frame {
+    explicit Frame(FrameKind frame_kind) : kind(frame_kind) {}
+
     FrameKind kind;
     bool first = true;
     bool expecting_value = false;
@@ -104,7 +113,8 @@ private:
     std::vector<std::pair<std::size_t, std::size_t>> field_ranges;
   };
 
-  std::string output_;
+  std::string owned_output_;
+  std::string *output_;
   std::vector<Frame> frames_;
   std::string error_;
   bool wrote_root_ = false;
@@ -131,7 +141,7 @@ private:
       return true;
     }
     if (!frame.first) {
-      output_.push_back(',');
+      output_->push_back(',');
     }
     frame.first = false;
     return true;
@@ -141,7 +151,7 @@ private:
     if (!before_value()) {
       return false;
     }
-    output_ += spelling;
+    *output_ += spelling;
     return true;
   }
 
@@ -150,15 +160,15 @@ private:
     if (!before_value()) {
       return false;
     }
-    output_ += prefix;
+    *output_ += prefix;
     char buffer[32];
     const auto [end, error] =
         std::to_chars(buffer, buffer + sizeof(buffer), value);
     if (error != std::errc{}) {
       return fail("failed to format integer value");
     }
-    output_.append(buffer, end);
-    output_.push_back(')');
+    output_->append(buffer, end);
+    output_->push_back(')');
     return true;
   }
 
@@ -167,25 +177,25 @@ private:
     const auto [end, error] =
         std::to_chars(buffer, buffer + sizeof(buffer), value);
     if (error == std::errc{}) {
-      output_.append(buffer, end);
+      output_->append(buffer, end);
     }
   }
 
   void append_string(std::string_view value) {
-    output_ += "str(";
+    *output_ += "str(";
     append_size(value.size());
-    output_.push_back(':');
-    output_ += value;
-    output_.push_back(')');
+    output_->push_back(':');
+    *output_ += value;
+    output_->push_back(')');
   }
 
   bool begin_object(std::size_t size, bool checked) {
     if (!before_value()) {
       return false;
     }
-    output_ += "obj(";
+    *output_ += "obj(";
     append_size(size);
-    output_ += ":{";
+    *output_ += ":{";
     frames_.push_back(Frame{FrameKind::Object});
     Frame &frame = frames_.back();
     frame.reject_duplicate_fields = checked;
@@ -199,7 +209,7 @@ private:
   }
 
   bool duplicate_field(Frame &frame, std::string_view name) {
-    for (const auto [offset, length] : frame.field_ranges) {
+    for (const auto &[offset, length] : frame.field_ranges) {
       if (length == name.size() &&
           frame.field_names.compare(offset, length, name) == 0) {
         return true;
@@ -218,7 +228,7 @@ private:
       return fail("object field is missing its value");
     }
     frames_.pop_back();
-    output_ += spelling;
+    *output_ += spelling;
     return true;
   }
 };

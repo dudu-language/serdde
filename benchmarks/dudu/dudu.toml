@@ -1,0 +1,14 @@
+name = "serdde-json-benchmark"
+entry = "src/main.dd"
+
+[cxx]
+standard = "c++20"
+
+[cc]
+flags = ["-O3", "-DNDEBUG"]
+
+[build]
+dir = "build"
+
+[deps]
+serdde = { path = "../.." }

@@ -1,0 +1,384 @@
+from serdde.error import SerddeError
+from serdde.error import syntax_error
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import bool_value
+from serdde.value import empty_object_value
+from serdde.value import f64_value
+from serdde.value import i64_value
+from serdde.value import null_value
+from serdde.value import sequence_value
+from serdde.value import string_value
+from serdde.value import u64_value
+
+
+class JsonParser:
+    source: str
+    offset: usize = 0
+    line: usize = 1
+    column: usize = 1
+
+    def done(self) -> bool:
+        return self.offset >= len(self.source)
+
+    def peek(self) -> char:
+        if self.done():
+            return char(0)
+        return self.source[self.offset]
+
+    def advance(self) -> char:
+        value = self.peek()
+        if self.done():
+            return value
+        self.offset += 1
+        if value == char(10):
+            self.line += 1
+            self.column = 1
+        else:
+            self.column += 1
+        return value
+
+    def fail(self, message: str) -> SerddeError:
+        return syntax_error(message, self.line, self.column, self.offset)
+
+    def skip_space(self):
+        while not self.done():
+            value = self.peek()
+            if value != char(32) and value != char(9) and value != char(10) and value != char(13):
+                return
+            self.advance()
+
+    def consume(self, expected: char) -> Result[bool, SerddeError]:
+        if self.peek() != expected:
+            return Err(self.fail("unexpected character"))
+        self.advance()
+        return Ok(True)
+
+    def consume_word(self, word: str) -> Result[bool, SerddeError]:
+        i: usize = 0
+        while i < len(word):
+            if self.done() or self.peek() != word[i]:
+                return Err(self.fail("invalid literal"))
+            self.advance()
+            i += 1
+        return Ok(True)
+
+    def append_utf8(self, output: &str, codepoint: u32) -> Result[bool, SerddeError]:
+        if codepoint <= 0x7f:
+            output += char(codepoint)
+            return Ok(True)
+        if codepoint <= 0x7ff:
+            output += char(0xc0 | (codepoint >> 6))
+            output += char(0x80 | (codepoint & 0x3f))
+            return Ok(True)
+        if codepoint <= 0xffff:
+            if codepoint >= 0xd800 and codepoint <= 0xdfff:
+                return Err(self.fail("unpaired Unicode surrogate"))
+            output += char(0xe0 | (codepoint >> 12))
+            output += char(0x80 | ((codepoint >> 6) & 0x3f))
+            output += char(0x80 | (codepoint & 0x3f))
+            return Ok(True)
+        if codepoint <= 0x10ffff:
+            output += char(0xf0 | (codepoint >> 18))
+            output += char(0x80 | ((codepoint >> 12) & 0x3f))
+            output += char(0x80 | ((codepoint >> 6) & 0x3f))
+            output += char(0x80 | (codepoint & 0x3f))
+            return Ok(True)
+        return Err(self.fail("Unicode code point is out of range"))
+
+    def hex_digit(self) -> Result[u32, SerddeError]:
+        if self.done():
+            return Err(self.fail("incomplete Unicode escape"))
+        value = self.advance()
+        if value >= char(48) and value <= char(57):
+            return Ok(u32(value) - u32(char(48)))
+        if value >= char(65) and value <= char(70):
+            return Ok(u32(value) - u32(char(65)) + 10)
+        if value >= char(97) and value <= char(102):
+            return Ok(u32(value) - u32(char(97)) + 10)
+        return Err(self.fail("invalid hexadecimal digit"))
+
+    def unicode_unit(self) -> Result[u32, SerddeError]:
+        value: u32 = 0
+        i: i32 = 0
+        while i < 4:
+            digit = self.hex_digit()
+            match digit:
+                case Ok(part):
+                    value = (value << 4) | part
+                case Err(error):
+                    return Err(error)
+            i += 1
+        return Ok(value)
+
+    def unicode_escape(self, output: &str) -> Result[bool, SerddeError]:
+        first_result = self.unicode_unit()
+        first: u32 = 0
+        match first_result:
+            case Ok(value):
+                first = value
+            case Err(error):
+                return Err(error)
+        if first >= 0xd800 and first <= 0xdbff:
+            if self.done() or self.advance() != char(92):
+                return Err(self.fail("high surrogate requires a low surrogate"))
+            if self.done() or self.advance() != char(117):
+                return Err(self.fail("high surrogate requires a low surrogate"))
+            second_result = self.unicode_unit()
+            second: u32 = 0
+            match second_result:
+                case Ok(value):
+                    second = value
+                case Err(error):
+                    return Err(error)
+            if second < 0xdc00 or second > 0xdfff:
+                return Err(self.fail("invalid low surrogate"))
+            codepoint = 0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+            return self.append_utf8(output, codepoint)
+        return self.append_utf8(output, first)
+
+    def string(self) -> Result[str, SerddeError]:
+        start = self.consume(char(34))
+        match start:
+            case Err(error):
+                return Err(error)
+            case Ok(_):
+                pass
+        output: str = ""
+        while not self.done():
+            value = self.advance()
+            if value == char(34):
+                return Ok(output)
+            if value < char(32):
+                return Err(self.fail("control character in string"))
+            if value != char(92):
+                output += value
+                continue
+            if self.done():
+                return Err(self.fail("incomplete escape sequence"))
+            escaped = self.advance()
+            if escaped == char(34) or escaped == char(92) or escaped == char(47):
+                output += escaped
+            elif escaped == char(98):
+                output += char(8)
+            elif escaped == char(102):
+                output += char(12)
+            elif escaped == char(110):
+                output += char(10)
+            elif escaped == char(114):
+                output += char(13)
+            elif escaped == char(116):
+                output += char(9)
+            elif escaped == char(117):
+                unicode_result = self.unicode_escape(output)
+                match unicode_result:
+                    case Err(error):
+                        return Err(error)
+                    case Ok(_):
+                        pass
+            else:
+                return Err(self.fail("unknown escape sequence"))
+        return Err(self.fail("unterminated string"))
+
+    def number(self) -> Result[Value, SerddeError]:
+        negative = False
+        if self.peek() == char(45):
+            negative = True
+            self.advance()
+        if self.done():
+            return Err(self.fail("incomplete number"))
+        integer: u64 = 0
+        digits: usize = 0
+        if self.peek() == char(48):
+            self.advance()
+            digits = 1
+            if not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
+                return Err(self.fail("leading zero in number"))
+        else:
+            while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
+                digit = u64(self.advance()) - u64(char(48))
+                if integer > (0xffffffffffffffff - digit) / 10:
+                    return Err(self.fail("integer is out of range"))
+                integer = integer * 10 + digit
+                digits += 1
+        if digits == 0:
+            return Err(self.fail("number requires a digit"))
+        fraction: f64 = 0.0
+        scale: f64 = 1.0
+        floating = False
+        if not self.done() and self.peek() == char(46):
+            floating = True
+            self.advance()
+            fraction_digits: usize = 0
+            while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
+                scale *= 10.0
+                fraction = fraction + f64(u64(self.advance()) - u64(char(48))) / scale
+                fraction_digits += 1
+            if fraction_digits == 0:
+                return Err(self.fail("fraction requires a digit"))
+        exponent: i32 = 0
+        exponent_negative = False
+        if not self.done() and (self.peek() == char(101) or self.peek() == char(69)):
+            floating = True
+            self.advance()
+            if not self.done() and (self.peek() == char(43) or self.peek() == char(45)):
+                exponent_negative = self.advance() == char(45)
+            exponent_digits: usize = 0
+            while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
+                if exponent < 10000:
+                    exponent = exponent * 10 + i32(u32(self.advance()) - u32(char(48)))
+                else:
+                    self.advance()
+                exponent_digits += 1
+            if exponent_digits == 0:
+                return Err(self.fail("exponent requires a digit"))
+        if floating:
+            result = f64(integer) + fraction
+            factor: f64 = 1.0
+            i: i32 = 0
+            while i < exponent:
+                factor *= 10.0
+                i += 1
+            if exponent_negative:
+                result /= factor
+            else:
+                result *= factor
+            if negative:
+                result = -result
+            return Ok(f64_value(result))
+        if negative:
+            if integer > 0x8000000000000000:
+                return Err(self.fail("signed integer is out of range"))
+            if integer == 0x8000000000000000:
+                return Ok(i64_value(-i64(0x7fffffffffffffff) - i64(1)))
+            return Ok(i64_value(-i64(integer)))
+        if integer <= 0x7fffffffffffffff:
+            return Ok(i64_value(i64(integer)))
+        return Ok(u64_value(integer))
+
+    def array(self) -> Result[Value, SerddeError]:
+        self.advance()
+        self.skip_space()
+        values: list[Value] = []
+        if self.peek() == char(93):
+            self.advance()
+            return Ok(sequence_value(values))
+        while True:
+            item = self.value()
+            match item:
+                case Ok(value):
+                    values.append(value)
+                case Err(error):
+                    return Err(error)
+            self.skip_space()
+            if self.peek() == char(93):
+                self.advance()
+                return Ok(sequence_value(values))
+            comma = self.consume(char(44))
+            match comma:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    pass
+            self.skip_space()
+        return Err(self.fail("unterminated array"))
+
+    def object(self) -> Result[Value, SerddeError]:
+        self.advance()
+        self.skip_space()
+        output = empty_object_value()
+        if self.peek() == char(125):
+            self.advance()
+            return Ok(output)
+        while True:
+            if self.peek() != char(34):
+                return Err(self.fail("object key must be a string"))
+            key_result = self.string()
+            key: str = ""
+            match key_result:
+                case Ok(value):
+                    key = value
+                case Err(error):
+                    return Err(error)
+            if output.has_field(key):
+                return Err(self.fail("duplicate object key"))
+            self.skip_space()
+            colon = self.consume(char(58))
+            match colon:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    pass
+            self.skip_space()
+            item = self.value()
+            match item:
+                case Ok(value):
+                    output.set_field(key, value)
+                case Err(error):
+                    return Err(error)
+            self.skip_space()
+            if self.peek() == char(125):
+                self.advance()
+                return Ok(output)
+            comma = self.consume(char(44))
+            match comma:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    pass
+            self.skip_space()
+        return Err(self.fail("unterminated object"))
+
+    def value(self) -> Result[Value, SerddeError]:
+        self.skip_space()
+        if self.done():
+            return Err(self.fail("expected a JSON value"))
+        lead = self.peek()
+        if lead == char(110):
+            consumed = self.consume_word("null")
+            match consumed:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    return Ok(null_value())
+        if lead == char(116):
+            consumed = self.consume_word("true")
+            match consumed:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    return Ok(bool_value(True))
+        if lead == char(102):
+            consumed = self.consume_word("false")
+            match consumed:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    return Ok(bool_value(False))
+        if lead == char(34):
+            parsed = self.string()
+            match parsed:
+                case Ok(value):
+                    return Ok(string_value(value))
+                case Err(error):
+                    return Err(error)
+        if lead == char(91):
+            return self.array()
+        if lead == char(123):
+            return self.object()
+        if lead == char(45) or (lead >= char(48) and lead <= char(57)):
+            return self.number()
+        return Err(self.fail("unexpected character while reading value"))
+
+
+def parse_json(source: str) -> Result[Value, SerddeError]:
+    parser = JsonParser(source=source)
+    result = parser.value()
+    match result:
+        case Err(error):
+            return Err(error)
+        case Ok(value):
+            parser.skip_space()
+            if not parser.done():
+                return Err(parser.fail("trailing characters after JSON value"))
+            return Ok(value)

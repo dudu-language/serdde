@@ -1,0 +1,64 @@
+enum ValueKind:
+    Null
+    Bool
+    I64
+    U64
+    F64
+    String
+    Sequence
+    Object
+
+
+class Value:
+    kind: ValueKind = ValueKind.Null
+    bool_value: bool = False
+    i64_value: i64 = 0
+    u64_value: u64 = 0
+    f64_value: f64 = 0.0
+    string_value: str = ""
+    sequence_value: list[Value] = []
+    object_value: dict[str, Value] = {}
+    object_order: list[str] = []
+
+    def has_field(self: &const[Self], name: str) -> bool:
+        return self.object_value.contains(name)
+
+    def field(self: &const[Self], name: str) -> &const[Value]:
+        return self.object_value.at(name)
+
+    def set_field(self, name: str, value: Value):
+        if not self.object_value.contains(name):
+            self.object_order.append(name)
+        self.object_value[name] = value
+
+
+def null_value() -> Value:
+    return Value()
+
+
+def bool_value(value: bool) -> Value:
+    return Value(kind=ValueKind.Bool, bool_value=value)
+
+
+def i64_value(value: i64) -> Value:
+    return Value(kind=ValueKind.I64, i64_value=value)
+
+
+def string_value(value: str) -> Value:
+    return Value(kind=ValueKind.String, string_value=value)
+
+
+def sequence_value(value: list[Value]) -> Value:
+    return Value(kind=ValueKind.Sequence, sequence_value=value)
+
+
+def empty_object_value() -> Value:
+    return Value(kind=ValueKind.Object)
+
+
+def f64_value(value: f64) -> Value:
+    return Value(kind=ValueKind.F64, f64_value=value)
+
+
+def u64_value(value: u64) -> Value:
+    return Value(kind=ValueKind.U64, u64_value=value)

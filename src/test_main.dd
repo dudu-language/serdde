@@ -1,0 +1,109 @@
+from serdde.convert import decode_i32
+from serdde.convert import decode_i8
+from serdde.convert import decode_str
+from serdde.convert import encode_i32
+from serdde.convert import encode_str
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.error import ErrorKind
+from serdde.error import SerddeError
+from serdde.error import type_error
+from serdde.json import dumps_value
+from serdde.json import loads
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import empty_object_value
+
+
+class CodecProbe:
+    value: i32
+
+    def serdde_serialize(self: &const[Self]) -> Result[Value, SerddeError]:
+        result = empty_object_value()
+        result.set_field("value", encode_i32(self.value))
+        return Ok(result)
+
+    def serdde_deserialize(value: &const[Value]) -> Result[CodecProbe, SerddeError]:
+        if value.kind != ValueKind.Object:
+            return Err(type_error("expected object"))
+        if not value.has_field("value"):
+            return Err(SerddeError(kind=ErrorKind.MissingField, message="missing value"))
+        field = value.field("value")
+        decoded = decode_i32(field)
+        match decoded:
+            case Err(error):
+                return Err(error.at_field("value"))
+            case Ok(number):
+                return Ok(CodecProbe(number))
+
+
+def expect_roundtrip(source: str) -> i32:
+    parsed = loads(source)
+    match parsed:
+        case Err(_):
+            return 1
+        case Ok(value):
+            encoded = dumps_value(value)
+            match encoded:
+                case Err(_):
+                    return 2
+                case Ok(text):
+                    reparsed = loads(text)
+                    match reparsed:
+                        case Err(_):
+                            return 3
+                        case Ok(_):
+                            return 0
+
+
+def main() -> i32:
+    if expect_roundtrip("null") != 0:
+        return 1
+    if expect_roundtrip("{\"name\":\"Ada\",\"active\":true,\"values\":[1,-2,3.5]}") != 0:
+        return 2
+    unicode = loads("\"\\u0041\\ud83d\\ude00\"")
+    match unicode:
+        case Err(_):
+            return 3
+        case Ok(value):
+            if value.kind != ValueKind.String:
+                return 4
+            if len(value.string_value) != 5:
+                return 5
+    malformed = loads("{\"a\":1,}")
+    match malformed:
+        case Ok(_):
+            return 6
+        case Err(error):
+            if error.line != 1:
+                return 7
+    encoded_number = encode_i32(42)
+    if encoded_number.kind != ValueKind.I64 or encoded_number.i64_value != 42:
+        return 8
+    overflow = decode_i8(encode_i32(1000))
+    match overflow:
+        case Ok(_):
+            return 9
+        case Err(error):
+            if error.kind != ErrorKind.Type:
+                return 10
+    decoded_text = decode_str(encode_str("dudu"))
+    match decoded_text:
+        case Err(_):
+            return 11
+        case Ok(text):
+            if text != "dudu":
+                return 12
+    encoded_probe = to_value(CodecProbe(42))
+    match encoded_probe:
+        case Err(_):
+            return 13
+        case Ok(probe_value):
+            probe = from_value[CodecProbe](probe_value)
+            match probe:
+                case Err(_):
+                    return 14
+                case Ok(value):
+                    if value.value != 42:
+                        return 15
+    return 0

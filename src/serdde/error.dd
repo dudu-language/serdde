@@ -1,0 +1,87 @@
+enum PathKind:
+    Field
+    Index
+
+
+class PathSegment:
+    kind: PathKind
+    field: str = ""
+    index: usize = 0
+
+
+enum ErrorKind:
+    Syntax
+    Type
+    MissingField
+    UnknownField
+    DuplicateField
+    InvalidValue
+    Unsupported
+
+
+class SerddeError:
+    kind: ErrorKind
+    message: str
+    path: list[PathSegment] = []
+    line: usize = 0
+    column: usize = 0
+    offset: usize = 0
+    format: str = ""
+    cause: str = ""
+
+    def at_field(self, name: str) -> SerddeError:
+        next = self
+        path: list[PathSegment] = [PathSegment(kind=PathKind.Field, field=name)]
+        for segment in next.path:
+            path.append(segment)
+        next.path = path
+        return next
+
+    def at_index(self, index: usize) -> SerddeError:
+        next = self
+        path: list[PathSegment] = [PathSegment(kind=PathKind.Index, index=index)]
+        for segment in next.path:
+            path.append(segment)
+        next.path = path
+        return next
+
+    def path_string(self) -> str:
+        output: str = "$"
+        for segment in self.path:
+            match segment.kind:
+                case PathKind.Field:
+                    output += "."
+                    output += segment.field
+                case PathKind.Index:
+                    output += "["
+                    output += str(segment.index)
+                    output += "]"
+        return output
+
+
+def syntax_error(message: str, line: usize, column: usize, offset: usize) -> SerddeError:
+    return SerddeError(
+        kind=ErrorKind.Syntax,
+        message=message,
+        line=line,
+        column=column,
+        offset=offset,
+    )
+
+
+def type_error(message: str) -> SerddeError:
+    return SerddeError(kind=ErrorKind.Type, message=message)
+
+
+def missing_field_error(name: str) -> SerddeError:
+    return SerddeError(
+        kind=ErrorKind.MissingField,
+        message="missing required field",
+    ).at_field(name)
+
+
+def unknown_field_error(name: str) -> SerddeError:
+    return SerddeError(
+        kind=ErrorKind.UnknownField,
+        message="unknown field",
+    ).at_field(name)

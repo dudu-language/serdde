@@ -1,0 +1,216 @@
+from serdde.error import SerddeError
+from serdde.error import type_error
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import bool_value
+from serdde.value import f64_value
+from serdde.value import i64_value
+from serdde.value import null_value
+from serdde.value import string_value
+from serdde.value import u64_value
+
+
+def encode_bool(value: bool) -> Value:
+    return bool_value(value)
+
+
+def encode_char(value: char) -> Value:
+    text: str = ""
+    text += value
+    return string_value(text)
+
+
+def encode_i8(value: i8) -> Value:
+    return i64_value(i64(value))
+
+
+def encode_i16(value: i16) -> Value:
+    return i64_value(i64(value))
+
+
+def encode_i32(value: i32) -> Value:
+    return i64_value(i64(value))
+
+
+def encode_i64(value: i64) -> Value:
+    return i64_value(value)
+
+
+def encode_u8(value: u8) -> Value:
+    return u64_value(u64(value))
+
+
+def encode_u16(value: u16) -> Value:
+    return u64_value(u64(value))
+
+
+def encode_u32(value: u32) -> Value:
+    return u64_value(u64(value))
+
+
+def encode_u64(value: u64) -> Value:
+    return u64_value(value)
+
+
+def encode_usize(value: usize) -> Value:
+    return u64_value(u64(value))
+
+
+def encode_f32(value: f32) -> Value:
+    return f64_value(f64(value))
+
+
+def encode_f64(value: f64) -> Value:
+    return f64_value(value)
+
+
+def encode_str(value: str) -> Value:
+    return string_value(value)
+
+
+def decode_bool(value: &const[Value]) -> Result[bool, SerddeError]:
+    if value.kind != ValueKind.Bool:
+        return Err(type_error("expected bool"))
+    return Ok(value.bool_value)
+
+
+def decode_char(value: &const[Value]) -> Result[char, SerddeError]:
+    if value.kind != ValueKind.String or len(value.string_value) != 1:
+        return Err(type_error("expected one-character string"))
+    return Ok(value.string_value[0])
+
+
+def decode_i64(value: &const[Value]) -> Result[i64, SerddeError]:
+    if value.kind == ValueKind.I64:
+        return Ok(value.i64_value)
+    if value.kind == ValueKind.U64 and value.u64_value <= 0x7fffffffffffffff:
+        return Ok(i64(value.u64_value))
+    return Err(type_error("expected signed 64-bit integer"))
+
+
+def decode_u64(value: &const[Value]) -> Result[u64, SerddeError]:
+    if value.kind == ValueKind.U64:
+        return Ok(value.u64_value)
+    if value.kind == ValueKind.I64 and value.i64_value >= 0:
+        return Ok(u64(value.i64_value))
+    return Err(type_error("expected unsigned 64-bit integer"))
+
+
+def decode_i32(value: &const[Value]) -> Result[i32, SerddeError]:
+    decoded = decode_i64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number) if number >= -2147483648 and number <= 2147483647:
+            return Ok(i32(number))
+        case Ok(_):
+            return Err(type_error("integer is out of range for i32"))
+
+
+def decode_i16(value: &const[Value]) -> Result[i16, SerddeError]:
+    decoded = decode_i64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number) if number >= -32768 and number <= 32767:
+            return Ok(i16(number))
+        case Ok(_):
+            return Err(type_error("integer is out of range for i16"))
+
+
+def decode_i8(value: &const[Value]) -> Result[i8, SerddeError]:
+    decoded = decode_i64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number) if number >= -128 and number <= 127:
+            return Ok(i8(number))
+        case Ok(_):
+            return Err(type_error("integer is out of range for i8"))
+
+
+def decode_u32(value: &const[Value]) -> Result[u32, SerddeError]:
+    decoded = decode_u64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number) if number <= 0xffffffff:
+            return Ok(u32(number))
+        case Ok(_):
+            return Err(type_error("integer is out of range for u32"))
+
+
+def decode_u16(value: &const[Value]) -> Result[u16, SerddeError]:
+    decoded = decode_u64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number) if number <= 65535:
+            return Ok(u16(number))
+        case Ok(_):
+            return Err(type_error("integer is out of range for u16"))
+
+
+def decode_u8(value: &const[Value]) -> Result[u8, SerddeError]:
+    decoded = decode_u64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number) if number <= 255:
+            return Ok(u8(number))
+        case Ok(_):
+            return Err(type_error("integer is out of range for u8"))
+
+
+def decode_usize(value: &const[Value]) -> Result[usize, SerddeError]:
+    decoded = decode_u64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number):
+            return Ok(usize(number))
+
+
+def decode_f64(value: &const[Value]) -> Result[f64, SerddeError]:
+    match value.kind:
+        case ValueKind.F64:
+            return Ok(value.f64_value)
+        case ValueKind.I64:
+            return Ok(f64(value.i64_value))
+        case ValueKind.U64:
+            return Ok(f64(value.u64_value))
+        case _:
+            return Err(type_error("expected number"))
+
+
+def decode_f32(value: &const[Value]) -> Result[f32, SerddeError]:
+    decoded = decode_f64(value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(number):
+            return Ok(f32(number))
+
+
+def decode_str(value: &const[Value]) -> Result[str, SerddeError]:
+    if value.kind != ValueKind.String:
+        return Err(type_error("expected string"))
+    return Ok(value.string_value)
+
+
+def decode_none(value: &const[Value]) -> Result[bool, SerddeError]:
+    if value.kind != ValueKind.Null:
+        return Err(type_error("expected null"))
+    return Ok(True)
+
+
+def encode_none() -> Value:
+    return null_value()
+
+
+def to_value[T](value: &const[T]) -> Result[Value, SerddeError]:
+    return value.serdde_serialize()
+
+
+def from_value[T](value: &const[Value]) -> Result[T, SerddeError]:
+    return T.serdde_deserialize(value)

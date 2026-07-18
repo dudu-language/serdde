@@ -1,0 +1,12 @@
+from serdde.error import SerddeError
+from serdde.json_parser import parse_json
+from serdde.json_writer import write_json
+from serdde.value import Value
+
+
+def loads(source: str) -> Result[Value, SerddeError]:
+    return parse_json(source)
+
+
+def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
+    return write_json(value)

@@ -1,0 +1,94 @@
+from serdde.error import SerddeError
+from serdde.error import type_error
+from serdde.value import Value
+from serdde.value import ValueKind
+
+
+def write_escaped(output: &str, value: str):
+    output += char(34)
+    for ch in value:
+        if ch == char(34):
+            output += char(92)
+            output += char(34)
+        elif ch == char(92):
+            output += char(92)
+            output += char(92)
+        elif ch == char(8):
+            output += char(92)
+            output += char(98)
+        elif ch == char(12):
+            output += char(92)
+            output += char(102)
+        elif ch == char(10):
+            output += char(92)
+            output += char(110)
+        elif ch == char(13):
+            output += char(92)
+            output += char(114)
+        elif ch == char(9):
+            output += char(92)
+            output += char(116)
+        else:
+            output += ch
+    output += char(34)
+
+
+def write_value(output: &str, value: &const[Value]) -> Result[bool, SerddeError]:
+    match value.kind:
+        case ValueKind.Null:
+            output += "null"
+        case ValueKind.Bool:
+            if value.bool_value:
+                output += "true"
+            else:
+                output += "false"
+        case ValueKind.I64:
+            output += str(value.i64_value)
+        case ValueKind.U64:
+            output += str(value.u64_value)
+        case ValueKind.F64:
+            output += str(value.f64_value)
+        case ValueKind.String:
+            write_escaped(output, value.string_value)
+        case ValueKind.Sequence:
+            output += char(91)
+            i: usize = 0
+            while i < len(value.sequence_value):
+                if i > 0:
+                    output += char(44)
+                child = write_value(output, value.sequence_value[i])
+                match child:
+                    case Err(error):
+                        return Err(error.at_index(i))
+                    case Ok(_):
+                        pass
+                i += 1
+            output += char(93)
+        case ValueKind.Object:
+            output += char(123)
+            i: usize = 0
+            while i < len(value.object_order):
+                if i > 0:
+                    output += char(44)
+                key = value.object_order[i]
+                write_escaped(output, key)
+                output += char(58)
+                child = write_value(output, value.object_value.at(key))
+                match child:
+                    case Err(error):
+                        return Err(error.at_field(key))
+                    case Ok(_):
+                        pass
+                i += 1
+            output += char(125)
+    return Ok(True)
+
+
+def write_json(value: &const[Value]) -> Result[str, SerddeError]:
+    output: str = ""
+    result = write_value(output, value)
+    match result:
+        case Ok(_):
+            return Ok(output)
+        case Err(error):
+            return Err(error)

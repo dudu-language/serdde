@@ -1,0 +1,507 @@
+from serdde.macro_codec_support import ErrorContext
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_codec_support import bare_variable
+from serdde.macro_codec_support import contextual_error
+from serdde.macro_codec_support import contexts_with
+from serdde.macro_codec_support import decode_leaf
+from serdde.macro_codec_support import encode_leaf
+from serdde.macro_codec_support import fixed_array_child
+from serdde.macro_codec_support import generic
+from serdde.macro_codec_support import is_template
+from serdde.macro_codec_support import propagated_result
+from serdde.macro_codec_support import typed_for
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import qname
+from serdde.macro_support import value_type
+import dudu.ast as ast
+
+
+def encode_sequence(
+    child_type: ast.TypeRef,
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    values_name = names.take("values")
+    index_name = names.take("index")
+    item_name = names.take("item")
+    ready_name = names.take("ready")
+    result.append(ast.variable_statement(
+        values_name,
+        generic("list", [value_type()]),
+        ast.list_expression([]),
+    ))
+    result.append(ast.variable_statement(
+        index_name,
+        ast.named_type("usize"),
+        ast.int_expression("0"),
+    ))
+    item_contexts = contexts_with(
+        contexts,
+        "at_index",
+        ast.name_expression(index_name),
+    )
+    loop_body = encode_statements(
+        child_type,
+        ast.name_expression(item_name),
+        ready_name,
+        item_contexts,
+        names,
+    )
+    loop_body.append(ast.expression_statement(method(
+        ast.name_expression(values_name),
+        "append",
+        [ast.name_expression(ready_name)],
+    )))
+    loop_body.append(ast.compound_assignment_statement(
+        ast.name_expression(index_name),
+        "+=",
+        ast.int_expression("1"),
+    ))
+    result.append(typed_for(item_name, child_type, source, loop_body))
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call(
+            "_serdde_value",
+            "sequence_value",
+            [ast.name_expression(values_name)],
+        ),
+    ))
+    return result
+
+
+def encode_dict(
+    type: &const[ast.TypeRef],
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    if len(type.children) != 2 or type.children[0].name != "str":
+        result.append(ast.return_statement(err(call(
+            "_serdde_error",
+            "unsupported_error",
+            [ast.string_expression("dict keys must be str")],
+        ))))
+        return result
+    key_name = names.take("key")
+    ready_name = names.take("ready")
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "empty_object_value", []),
+    ))
+    key = ast.name_expression(key_name)
+    value = method(source, "at", [key])
+    entry_contexts = contexts_with(contexts, "at_field", key)
+    loop_body = encode_statements(
+        type.children[1],
+        value,
+        ready_name,
+        entry_contexts,
+        names,
+    )
+    loop_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [key, ast.name_expression(ready_name)],
+    )))
+    result.append(typed_for(
+        key_name,
+        ast.named_type("str"),
+        call("_serdde_convert", "dict_keys", [source]),
+        loop_body,
+    ))
+    return result
+
+
+def encode_option(
+    child_type: ast.TypeRef,
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "null_value", []),
+    ))
+    ready_name = names.take("ready")
+    body = encode_statements(
+        child_type,
+        method(source, "value", []),
+        ready_name,
+        contexts,
+        names,
+    )
+    body.append(ast.assignment_statement(
+        ast.name_expression(output_name),
+        ast.name_expression(ready_name),
+    ))
+    result.append(ast.if_statement(method(source, "has_value", []), body))
+    return result
+
+
+def encode_result(
+    type: &const[ast.TypeRef],
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "empty_object_value", []),
+    ))
+    ok_name = names.take("ok")
+    ok_body = encode_statements(
+        type.children[0],
+        member(source, "value"),
+        ok_name,
+        contexts_with(contexts, "at_field", ast.string_expression("Ok")),
+        names,
+    )
+    ok_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [ast.string_expression("Ok"), ast.name_expression(ok_name)],
+    )))
+    err_name = names.take("err")
+    err_body = encode_statements(
+        type.children[1],
+        member(source, "err"),
+        err_name,
+        contexts_with(contexts, "at_field", ast.string_expression("Err")),
+        names,
+    )
+    err_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [ast.string_expression("Err"), ast.name_expression(err_name)],
+    )))
+    result.append(ast.if_statement(member(source, "ok"), ok_body))
+    result.append(ast.else_statement(err_body))
+    return result
+
+
+def encode_statements(
+    type: ast.TypeRef,
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    if is_template(type, "list") or is_template(type, "set"):
+        return encode_sequence(type.children[0], source, output_name, contexts, names)
+    if is_template(type, "dict"):
+        return encode_dict(type, source, output_name, contexts, names)
+    if is_template(type, "Option"):
+        return encode_option(type.children[0], source, output_name, contexts, names)
+    if is_template(type, "Result"):
+        return encode_result(type, source, output_name, contexts, names)
+    if type.kind == ast.TypeKind.FixedArray:
+        return encode_sequence(fixed_array_child(type), source, output_name, contexts, names)
+    result_name = names.take("encoded")
+    return propagated_result(
+        result_name,
+        output_name,
+        value_type(),
+        encode_leaf(type, source),
+        contexts,
+    )
+
+
+def expect_kind(
+    value: ast.Expression,
+    kind: str,
+    message: str,
+    contexts: list[ErrorContext],
+) -> ast.Statement:
+    condition = ast.binary_expression(
+        member(value, "kind"),
+        "!=",
+        member(qname("_serdde_value", "ValueKind"), kind),
+    )
+    failure = contextual_error(
+        call("_serdde_error", "type_error", [ast.string_expression(message)]),
+        contexts,
+    )
+    return ast.if_statement(condition, [ast.return_statement(err(failure))])
+
+
+def decode_sequence(
+    output_type: ast.TypeRef,
+    child_type: ast.TypeRef,
+    value: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+    as_set: bool,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(expect_kind(value, "Sequence", "expected sequence", contexts))
+    if as_set:
+        result.append(ast.variable_statement(
+            output_name,
+            output_type,
+            ast.template_call_expression(
+                ast.name_expression("set"),
+                [child_type],
+                [],
+            ),
+        ))
+    else:
+        result.append(ast.variable_statement(
+            output_name,
+            output_type,
+            ast.list_expression([]),
+        ))
+    index_name = names.take("index")
+    item_name = names.take("item")
+    ready_name = names.take("ready")
+    result.append(ast.variable_statement(
+        index_name,
+        ast.named_type("usize"),
+        ast.int_expression("0"),
+    ))
+    item_contexts = contexts_with(
+        contexts,
+        "at_index",
+        ast.name_expression(index_name),
+    )
+    loop_body = decode_statements(
+        child_type,
+        ast.name_expression(item_name),
+        ready_name,
+        item_contexts,
+        names,
+    )
+    insertion = "append"
+    if as_set:
+        insertion = "insert"
+    loop_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        insertion,
+        [ast.name_expression(ready_name)],
+    )))
+    loop_body.append(ast.compound_assignment_statement(
+        ast.name_expression(index_name),
+        "+=",
+        ast.int_expression("1"),
+    ))
+    result.append(typed_for(
+        item_name,
+        value_type(),
+        member(value, "sequence_value"),
+        loop_body,
+    ))
+    return result
+
+
+def decode_dict(
+    type: &const[ast.TypeRef],
+    value: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(expect_kind(value, "Object", "expected object", contexts))
+    result.append(ast.variable_statement(
+        output_name,
+        type,
+        ast.dict_expression([]),
+    ))
+    key_name = names.take("key")
+    ready_name = names.take("ready")
+    key = ast.name_expression(key_name)
+    child_value = method(value, "field", [key])
+    loop_body = decode_statements(
+        type.children[1],
+        child_value,
+        ready_name,
+        contexts_with(contexts, "at_field", key),
+        names,
+    )
+    loop_body.append(ast.assignment_statement(
+        ast.index_expression(ast.name_expression(output_name), [key]),
+        ast.name_expression(ready_name),
+    ))
+    result.append(typed_for(
+        key_name,
+        ast.named_type("str"),
+        member(value, "object_order"),
+        loop_body,
+    ))
+    return result
+
+
+def decode_option(
+    type: &const[ast.TypeRef],
+    value: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(output_name, type, ast.none_expression()))
+    ready_name = names.take("ready")
+    body = decode_statements(
+        type.children[0],
+        value,
+        ready_name,
+        contexts,
+        names,
+    )
+    body.append(ast.assignment_statement(
+        ast.name_expression(output_name),
+        ast.name_expression(ready_name),
+    ))
+    condition = ast.binary_expression(
+        member(value, "kind"),
+        "!=",
+        member(qname("_serdde_value", "ValueKind"), "Null"),
+    )
+    result.append(ast.if_statement(condition, body))
+    return result
+
+
+def decode_result(
+    type: &const[ast.TypeRef],
+    value: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(expect_kind(value, "Object", "expected Result object", contexts))
+    result.append(bare_variable(output_name, type))
+    ok_ready = names.take("ok")
+    ok_body = decode_statements(
+        type.children[0],
+        method(value, "field", [ast.string_expression("Ok")]),
+        ok_ready,
+        contexts_with(contexts, "at_field", ast.string_expression("Ok")),
+        names,
+    )
+    ok_body.append(ast.assignment_statement(
+        ast.name_expression(output_name),
+        ast.call_expression(ast.name_expression("Ok"), [ast.name_expression(ok_ready)]),
+    ))
+    err_ready = names.take("err")
+    err_body = decode_statements(
+        type.children[1],
+        method(value, "field", [ast.string_expression("Err")]),
+        err_ready,
+        contexts_with(contexts, "at_field", ast.string_expression("Err")),
+        names,
+    )
+    err_body.append(ast.assignment_statement(
+        ast.name_expression(output_name),
+        ast.call_expression(ast.name_expression("Err"), [ast.name_expression(err_ready)]),
+    ))
+    has_ok = method(value, "has_field", [ast.string_expression("Ok")])
+    has_err = method(value, "has_field", [ast.string_expression("Err")])
+    result.append(ast.if_statement(has_ok, ok_body))
+    result.append(ast.elif_statement(has_err, err_body))
+    failure = contextual_error(
+        call(
+            "_serdde_error",
+            "invalid_value_error",
+            [ast.string_expression("expected exactly one of Ok or Err")],
+        ),
+        contexts,
+    )
+    result.append(ast.else_statement([ast.return_statement(err(failure))]))
+    return result
+
+
+def decode_fixed_array(
+    type: &const[ast.TypeRef],
+    value: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(expect_kind(value, "Sequence", "expected fixed array", contexts))
+    result.append(bare_variable(output_name, type))
+    expected = ast.call_expression(ast.name_expression("len"), [ast.name_expression(output_name)])
+    actual = ast.call_expression(ast.name_expression("len"), [member(value, "sequence_value")])
+    wrong_size = ast.binary_expression(actual, "!=", expected)
+    failure = contextual_error(
+        call(
+            "_serdde_error",
+            "invalid_value_error",
+            [ast.string_expression("fixed array length mismatch")],
+        ),
+        contexts,
+    )
+    result.append(ast.if_statement(wrong_size, [ast.return_statement(err(failure))]))
+    index_name = names.take("index")
+    ready_name = names.take("ready")
+    result.append(ast.variable_statement(
+        index_name,
+        ast.named_type("usize"),
+        ast.int_expression("0"),
+    ))
+    condition = ast.binary_expression(ast.name_expression(index_name), "<", expected)
+    child_value = ast.index_expression(member(value, "sequence_value"), [ast.name_expression(index_name)])
+    body = decode_statements(
+        fixed_array_child(type),
+        child_value,
+        ready_name,
+        contexts_with(contexts, "at_index", ast.name_expression(index_name)),
+        names,
+    )
+    body.append(ast.assignment_statement(
+        ast.index_expression(ast.name_expression(output_name), [ast.name_expression(index_name)]),
+        ast.name_expression(ready_name),
+    ))
+    body.append(ast.compound_assignment_statement(
+        ast.name_expression(index_name),
+        "+=",
+        ast.int_expression("1"),
+    ))
+    result.append(ast.while_statement(condition, body))
+    return result
+
+
+def decode_statements(
+    type: ast.TypeRef,
+    value: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    if is_template(type, "list"):
+        return decode_sequence(type, type.children[0], value, output_name, contexts, names, False)
+    if is_template(type, "set"):
+        return decode_sequence(type, type.children[0], value, output_name, contexts, names, True)
+    if is_template(type, "dict"):
+        return decode_dict(type, value, output_name, contexts, names)
+    if is_template(type, "Option"):
+        return decode_option(type, value, output_name, contexts, names)
+    if is_template(type, "Result"):
+        return decode_result(type, value, output_name, contexts, names)
+    if type.kind == ast.TypeKind.FixedArray:
+        return decode_fixed_array(type, value, output_name, contexts, names)
+    result_name = names.take("decoded")
+    return propagated_result(
+        result_name,
+        output_name,
+        type,
+        decode_leaf(type, value),
+        contexts,
+    )

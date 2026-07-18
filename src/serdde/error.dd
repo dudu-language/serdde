@@ -85,3 +85,11 @@ def unknown_field_error(name: str) -> SerddeError:
         kind=ErrorKind.UnknownField,
         message="unknown field",
     ).at_field(name)
+
+
+def invalid_value_error(message: str) -> SerddeError:
+    return SerddeError(kind=ErrorKind.InvalidValue, message=message)
+
+
+def unsupported_error(message: str) -> SerddeError:
+    return SerddeError(kind=ErrorKind.Unsupported, message=message)

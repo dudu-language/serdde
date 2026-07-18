@@ -1,0 +1,176 @@
+import dudu.ast as ast
+
+
+def qname(root: str, member: str) -> ast.Expression:
+    return ast.member_expression(ast.name_expression(root), member)
+
+
+def member(root: ast.Expression, name: str) -> ast.Expression:
+    return ast.member_expression(root, name)
+
+
+def call(root: str, name: str, arguments: list[ast.Expression]) -> ast.Expression:
+    return ast.call_expression(qname(root, name), arguments)
+
+
+def method(value: ast.Expression, name: str, arguments: list[ast.Expression]) -> ast.Expression:
+    return ast.call_expression(member(value, name), arguments)
+
+
+def ok(value: ast.Expression) -> ast.Expression:
+    return ast.call_expression(ast.name_expression("Ok"), [value])
+
+
+def err(value: ast.Expression) -> ast.Expression:
+    return ast.call_expression(ast.name_expression("Err"), [value])
+
+
+def value_type() -> ast.TypeRef:
+    return ast.qualified_type("_serdde_value.Value")
+
+
+def error_type() -> ast.TypeRef:
+    return ast.qualified_type("_serdde_error.SerddeError")
+
+
+def result_type(value: ast.TypeRef) -> ast.TypeRef:
+    return ast.generic_type("Result", [value, error_type()])
+
+
+def inferred_variable(name: str, value: ast.Expression) -> ast.Statement:
+    return ast.Statement(kind=ast.StatementKind.Variable, name=name, value=value)
+
+
+def self_reference() -> ast.Parameter:
+    return ast.Parameter(
+        name="self",
+        type=ast.reference_type(ast.const_type(ast.named_type("Self"))),
+    )
+
+
+def value_reference() -> ast.Parameter:
+    return ast.Parameter(
+        name="value",
+        type=ast.reference_type(ast.const_type(value_type())),
+    )
+
+
+def is_named(type: &const[ast.TypeRef], name: str) -> bool:
+    return type.kind == ast.TypeKind.Named and type.name == name
+
+
+def primitive_encoder(type: &const[ast.TypeRef]) -> str:
+    if type.kind != ast.TypeKind.Named:
+        return ""
+    match type.name:
+        case "bool":
+            return "encode_bool"
+        case "char":
+            return "encode_char"
+        case "i8":
+            return "encode_i8"
+        case "i16":
+            return "encode_i16"
+        case "i32":
+            return "encode_i32"
+        case "i64":
+            return "encode_i64"
+        case "u8":
+            return "encode_u8"
+        case "u16":
+            return "encode_u16"
+        case "u32":
+            return "encode_u32"
+        case "u64":
+            return "encode_u64"
+        case "usize":
+            return "encode_usize"
+        case "f32":
+            return "encode_f32"
+        case "f64":
+            return "encode_f64"
+        case "str":
+            return "encode_str"
+        case _:
+            return ""
+
+
+def primitive_decoder(type: &const[ast.TypeRef]) -> str:
+    if type.kind != ast.TypeKind.Named:
+        return ""
+    match type.name:
+        case "bool":
+            return "decode_bool"
+        case "char":
+            return "decode_char"
+        case "i8":
+            return "decode_i8"
+        case "i16":
+            return "decode_i16"
+        case "i32":
+            return "decode_i32"
+        case "i64":
+            return "decode_i64"
+        case "u8":
+            return "decode_u8"
+        case "u16":
+            return "decode_u16"
+        case "u32":
+            return "decode_u32"
+        case "u64":
+            return "decode_u64"
+        case "usize":
+            return "decode_usize"
+        case "f32":
+            return "decode_f32"
+        case "f64":
+            return "decode_f64"
+        case "str":
+            return "decode_str"
+        case _:
+            return ""
+
+
+def encode_leaf(type: &const[ast.TypeRef], value: ast.Expression) -> ast.Expression:
+    encoder = primitive_encoder(type)
+    if encoder != "":
+        return ok(call("_serdde_convert", encoder, [value]))
+    return call("_serdde_convert", "to_value", [value])
+
+
+def decode_leaf(type: &const[ast.TypeRef], value: ast.Expression) -> ast.Expression:
+    decoder = primitive_decoder(type)
+    if decoder != "":
+        return call("_serdde_convert", decoder, [value])
+    return ast.template_call_expression(
+        qname("_serdde_convert", "from_value"),
+        [type],
+        [value],
+    )
+
+
+def propagated_result(
+    result_name: str,
+    output_name: str,
+    output_type: ast.TypeRef,
+    expression: ast.Expression,
+    path: str,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(result_name, result_type(output_type), expression))
+    result_expr = ast.name_expression(result_name)
+    error_return = method(
+        member(result_expr, "err"),
+        "at_field",
+        [ast.string_expression(path)],
+    )
+    result.append(ast.if_statement(
+        ast.unary_expression("not", member(result_expr, "ok")),
+        [ast.return_statement(err(error_return))],
+    ))
+    result.append(ast.variable_statement(
+        output_name,
+        output_type,
+        member(result_expr, "value"),
+    ))
+    return result

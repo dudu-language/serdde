@@ -10,6 +10,13 @@ from serdde.value import string_value
 from serdde.value import u64_value
 
 
+def dict_keys[T](values: &const[dict[str, T]]) -> list[str]:
+    result: list[str] = []
+    for key in values:
+        result.append(key)
+    return result
+
+
 def encode_bool(value: bool) -> Value:
     return bool_value(value)
 

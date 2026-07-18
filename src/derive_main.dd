@@ -1,0 +1,65 @@
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Address:
+    city: str
+    postal_code: i32
+
+
+@derive(Serde)
+class Player:
+    id: u64
+    name: str
+    active: bool = True
+    address: Address
+    scores: list[i32]
+    tags: set[str]
+    metadata: dict[str, u64]
+    nickname: Option[str]
+    status: Result[i32, str]
+    matrix: array[i32][2, 2]
+
+
+def main() -> i32:
+    source = Player(
+        id=7,
+        name="Ada",
+        active=True,
+        address=Address(city="London", postal_code=42),
+        scores=[2, 3, 5],
+        tags={"admin", "active"},
+        metadata={"visits": 9},
+        nickname="ace",
+        status=Ok(200),
+        matrix=[[1, 2], [3, 4]],
+    )
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[Player](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(player):
+                    if player.id != 7 or player.name != "Ada":
+                        return 3
+                    if player.address.city != "London":
+                        return 4
+                    if len(player.scores) != 3 or player.scores[2] != 5:
+                        return 5
+                    if not player.tags.contains("admin"):
+                        return 6
+                    if player.metadata.at("visits") != 9:
+                        return 7
+                    if not player.nickname.has_value() or player.nickname.value() != "ace":
+                        return 8
+                    if not player.status.ok or player.status.value != 200:
+                        return 9
+                    if player.matrix[1, 0] != 3:
+                        return 10
+    return 0

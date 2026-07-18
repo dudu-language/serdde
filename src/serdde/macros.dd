@@ -1,0 +1,231 @@
+from serdde.macro_support import call
+from serdde.macro_codec import decode_statements
+from serdde.macro_codec import encode_statements
+from serdde.macro_codec_support import ErrorContext
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_codec_support import contexts_with
+from serdde.macro_support import err
+from serdde.macro_support import error_type
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import ok
+from serdde.macro_support import qname
+from serdde.macro_support import result_type
+from serdde.macro_support import self_reference
+from serdde.macro_support import value_reference
+from serdde.macro_support import value_type
+import dudu.ast as ast
+import serdde.convert
+import serdde.error
+import serdde.value
+
+
+class SerdeOptions:
+    rename: str = ""
+    rename_all: str = ""
+    alias: list[str] = []
+    default: str = ""
+    skip: bool = False
+    skip_serializing: bool = False
+    skip_deserializing: bool = False
+    skip_if: str = ""
+    flatten: bool = False
+    deny_unknown_fields: bool = False
+    tag: str = ""
+    content: str = ""
+    untagged: bool = False
+
+
+def serialized_name(field: &const[ast.FieldDecl]) -> str:
+    options = ast.find_attribute(field.attributes, "Serde")
+    if options.has_value():
+        name = ast.string_argument(options.value(), "rename", "")
+        if name != "":
+            return name
+    return field.name
+
+
+def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    names = GeneratedNames()
+    body.append(ast.variable_statement(
+        "output",
+        value_type(),
+        call("_serdde_value", "empty_object_value", []),
+    ))
+    for field in item.fields:
+        options = ast.find_attribute(field.attributes, "Serde")
+        if options.has_value():
+            if ast.bool_argument(options.value(), "skip", False):
+                continue
+            if ast.bool_argument(options.value(), "skip_serializing", False):
+                continue
+        field_name = serialized_name(field)
+        source = member(ast.name_expression("self"), field.name)
+        value_name = "encoded_" + field.name + "_ready"
+        contexts: list[ErrorContext] = []
+        contexts = contexts_with(
+            contexts,
+            "at_field",
+            ast.string_expression(field_name),
+        )
+        for statement in encode_statements(
+            field.type,
+            source,
+            value_name,
+            contexts,
+            names,
+        ):
+            body.append(statement)
+        body.append(ast.expression_statement(method(
+            ast.name_expression("output"),
+            "set_field",
+            [ast.string_expression(field_name), ast.name_expression(value_name)],
+        )))
+    body.append(ast.return_statement(ok(ast.name_expression("output"))))
+    return ast.FunctionDecl(
+        name="serdde_serialize",
+        parameters=[self_reference()],
+        return_type=result_type(value_type()),
+        body=body,
+    )
+
+
+def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    names = GeneratedNames()
+    is_object = ast.binary_expression(
+        member(ast.name_expression("value"), "kind"),
+        "!=",
+        member(qname("_serdde_value", "ValueKind"), "Object"),
+    )
+    body.append(ast.if_statement(is_object, [
+        ast.return_statement(err(call(
+            "_serdde_error",
+            "type_error",
+            [ast.string_expression("expected object")],
+        ))),
+    ]))
+    constructor_arguments: list[ast.Expression] = []
+    for field in item.fields:
+        options = ast.find_attribute(field.attributes, "Serde")
+        skip = False
+        if options.has_value():
+            skip = ast.bool_argument(options.value(), "skip", False)
+            if ast.bool_argument(options.value(), "skip_deserializing", False):
+                skip = True
+        field_name = serialized_name(field)
+        if skip:
+            if field.value.has_value():
+                constructor_arguments.append(ast.named_argument_expression(field.name, field.value.value()))
+                continue
+            body.append(ast.return_statement(err(call(
+                "_serdde_error",
+                "missing_field_error",
+                [ast.string_expression(field_name)],
+            ))))
+            continue
+        has_field = method(
+            ast.name_expression("value"),
+            "has_field",
+            [ast.string_expression(field_name)],
+        )
+        if field.value.has_value():
+            body.append(ast.variable_statement(field.name, field.type, field.value.value()))
+            field_lookup = method(
+                ast.name_expression("value"),
+                "field",
+                [ast.string_expression(field_name)],
+            )
+            ready_name = "decoded_" + field.name + "_ready"
+            contexts: list[ErrorContext] = []
+            contexts = contexts_with(
+                contexts,
+                "at_field",
+                ast.string_expression(field_name),
+            )
+            decode_body = decode_statements(
+                field.type,
+                field_lookup,
+                ready_name,
+                contexts,
+                names,
+            )
+            decode_body.append(ast.assignment_statement(
+                ast.name_expression(field.name),
+                ast.name_expression(ready_name),
+            ))
+            body.append(ast.if_statement(has_field, decode_body))
+        else:
+            body.append(ast.if_statement(
+                ast.unary_expression("not", has_field),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "missing_field_error",
+                    [ast.string_expression(field_name)],
+                )))],
+            ))
+            field_lookup = method(
+                ast.name_expression("value"),
+                "field",
+                [ast.string_expression(field_name)],
+            )
+            ready_name = field.name
+            contexts: list[ErrorContext] = []
+            contexts = contexts_with(
+                contexts,
+                "at_field",
+                ast.string_expression(field_name),
+            )
+            for statement in decode_statements(
+                field.type,
+                field_lookup,
+                ready_name,
+                contexts,
+                names,
+            ):
+                body.append(statement)
+        constructor_arguments.append(ast.named_argument_expression(
+            field.name,
+            ast.name_expression(field.name),
+        ))
+    constructed = ast.call_expression(ast.name_expression("Self"), constructor_arguments)
+    body.append(ast.return_statement(ok(constructed)))
+    return ast.FunctionDecl(
+        name="serdde_deserialize",
+        parameters=[value_reference()],
+        return_type=result_type(ast.named_type("Self")),
+        body=body,
+        is_static=True,
+    )
+
+
+def runtime_imports(out: &ast.Expansion):
+    out.require_module("serdde.convert", "_serdde_convert")
+    out.require_module("serdde.error", "_serdde_error")
+    out.require_module("serdde.value", "_serdde_value")
+
+
+@macro(attributes=SerdeOptions)
+def Serialize(item: ast.ClassDecl) -> ast.Expansion:
+    out = ast.expansion()
+    runtime_imports(out)
+    out.add_method(encode_method(item))
+    return out
+
+
+@macro(attributes=SerdeOptions)
+def Deserialize(item: ast.ClassDecl) -> ast.Expansion:
+    out = ast.expansion()
+    runtime_imports(out)
+    out.add_method(decode_method(item))
+    return out
+
+
+@macro(attributes=SerdeOptions)
+def Serde(item: ast.ClassDecl) -> ast.Expansion:
+    out = ast.expansion()
+    runtime_imports(out)
+    out.add_method(encode_method(item))
+    out.add_method(decode_method(item))
+    return out

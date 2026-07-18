@@ -10,3 +10,7 @@ dir = "build"
 [targets.tests]
 entry = "src/test_main.dd"
 kind = "executable"
+
+[targets.derive]
+entry = "src/derive_main.dd"
+kind = "executable"

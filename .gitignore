@@ -1,3 +1,4 @@
 build/
+target/
 .dudu/
 benchmarks/dudu/dudu.lock

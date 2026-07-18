@@ -1,7 +1,6 @@
 #pragma once
 
-#include "json_wire_location.hpp"
-#include "yyjson.h"
+#include "json_wire_document.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -57,99 +56,6 @@ inline bool append_escaped_json(std::string &output, std::string_view value) {
   output.push_back('"');
   return true;
 }
-
-inline bool validate_json_tree(yyjson_val *value, std::size_t depth,
-                               std::string &error) {
-  if (depth > 128) {
-    error = "JSON nesting depth exceeds 128";
-    return false;
-  }
-  if (yyjson_is_arr(value)) {
-    const std::size_t size = yyjson_arr_size(value);
-    for (std::size_t i = 0; i < size; ++i) {
-      if (!validate_json_tree(yyjson_arr_get(value, i), depth + 1, error)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  if (!yyjson_is_obj(value)) {
-    return true;
-  }
-  std::vector<std::string_view> keys;
-  keys.reserve(yyjson_obj_size(value));
-  yyjson_obj_iter iterator = yyjson_obj_iter_with(value);
-  yyjson_val *key = nullptr;
-  while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
-    const std::string_view spelling(yyjson_get_str(key), yyjson_get_len(key));
-    for (const std::string_view previous : keys) {
-      if (previous == spelling) {
-        error = "duplicate object key";
-        return false;
-      }
-    }
-    keys.push_back(spelling);
-    if (!validate_json_tree(yyjson_obj_iter_get_val(key), depth + 1, error)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-struct JsonDocument {
-  std::string_view source;
-  yyjson_doc *document = nullptr;
-  std::string error;
-  std::size_t error_offset = 0;
-
-  explicit JsonDocument(const std::string &input) : source(input) {
-    yyjson_read_err parse_error{};
-    // yyjson accepts mutable storage because its optional in-situ mode edits
-    // the input. YYJSON_READ_NOFLAG guarantees that this buffer is read-only.
-    document =
-        yyjson_read_opts(const_cast<char *>(source.data()), source.size(),
-                         YYJSON_READ_NOFLAG, nullptr, &parse_error);
-    if (document == nullptr) {
-      error = parse_error.msg == nullptr ? "invalid JSON" : parse_error.msg;
-      error_offset = parse_error.pos;
-      return;
-    }
-    if (!validate_json_tree(yyjson_doc_get_root(document), 0, error)) {
-      yyjson_doc_free(document);
-      document = nullptr;
-    }
-  }
-
-  ~JsonDocument() {
-    if (document != nullptr) {
-      yyjson_doc_free(document);
-    }
-  }
-
-  std::size_t line() const {
-    std::size_t result = 1;
-    const std::size_t limit = std::min(error_offset, source.size());
-    for (std::size_t i = 0; i < limit; ++i) {
-      if (source[i] == '\n') {
-        ++result;
-      }
-    }
-    return result;
-  }
-
-  std::size_t column() const {
-    const std::size_t limit = std::min(error_offset, source.size());
-    const std::size_t newline = source.rfind('\n', limit == 0 ? 0 : limit - 1);
-    return newline == std::string::npos ? limit + 1 : limit - newline;
-  }
-
-  std::size_t value_offset(yyjson_val *value) const {
-    return document == nullptr
-               ? error_offset
-               : json_value_offset(source, yyjson_doc_get_root(document),
-                                   value);
-  }
-};
 
 } // namespace detail
 
@@ -430,17 +336,16 @@ public:
   }
 
   std::string key(std::size_t index) const {
-    if (!yyjson_is_obj(value_))
+    if (!yyjson_is_obj(value_)) {
       return {};
-    yyjson_obj_iter iterator = yyjson_obj_iter_with(value_);
-    yyjson_val *key = nullptr;
-    std::size_t current = 0;
-    while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
-      if (current++ == index) {
-        return std::string(yyjson_get_str(key), yyjson_get_len(key));
-      }
     }
-    return {};
+    const detail::JsonObjectEntry *entry =
+        document_->object_entry(value_, index);
+    if (entry == nullptr) {
+      return {};
+    }
+    return std::string(yyjson_get_str(entry->first),
+                       yyjson_get_len(entry->first));
   }
 
   JsonReader element(std::size_t index) const {
@@ -448,14 +353,9 @@ public:
       return JsonReader(document_, yyjson_arr_get(value_, index));
     }
     if (yyjson_is_obj(value_)) {
-      yyjson_obj_iter iterator = yyjson_obj_iter_with(value_);
-      yyjson_val *key = nullptr;
-      std::size_t current = 0;
-      while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
-        if (current++ == index) {
-          return JsonReader(document_, yyjson_obj_iter_get_val(key));
-        }
-      }
+      const detail::JsonObjectEntry *entry =
+          document_->object_entry(value_, index);
+      return JsonReader(document_, entry == nullptr ? nullptr : entry->second);
     }
     return JsonReader(document_, nullptr);
   }
@@ -466,18 +366,7 @@ public:
   }
 
   std::size_t field_count(const std::string &name) const {
-    if (!yyjson_is_obj(value_))
-      return 0;
-    std::size_t count = 0;
-    yyjson_obj_iter iterator = yyjson_obj_iter_with(value_);
-    yyjson_val *key = nullptr;
-    while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
-      if (yyjson_get_len(key) == name.size() &&
-          std::string_view(yyjson_get_str(key), yyjson_get_len(key)) == name) {
-        ++count;
-      }
-    }
-    return count;
+    return has_field(name) ? 1 : 0;
   }
 
   JsonReader field(const std::string &name) const {
@@ -498,7 +387,12 @@ public:
   }
   bool key_matches(std::size_t index, const std::string &name,
                    std::uint64_t) const {
-    return key(index) == name;
+    const detail::JsonObjectEntry *entry =
+        yyjson_is_obj(value_) ? document_->object_entry(value_, index)
+                              : nullptr;
+    return entry != nullptr && yyjson_get_len(entry->first) == name.size() &&
+           std::string_view(yyjson_get_str(entry->first),
+                            yyjson_get_len(entry->first)) == name;
   }
 
 private:

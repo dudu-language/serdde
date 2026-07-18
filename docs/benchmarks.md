@@ -25,89 +25,89 @@ uses encoded wire bytes. Malformed cases measure rejection and appear separately
 
 | implementation | workload | operation | ns/op | MiB/s | alloc/op | allocated B/op | RSS MiB | wire B |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Serdde direct | small | encode | 329.3 | 353.3 | 6.00 | 646.0 | 3.8 | 122 |
-| Serdde direct | small | decode | 689.5 | 168.7 | 24.00 | 1978.0 | 4.1 | 122 |
-| Serdde direct | nested | encode | 273.0 | 279.5 | 7.00 | 1173.0 | 3.8 | 80 |
-| Serdde direct | nested | decode | 356.4 | 214.1 | 8.00 | 596.0 | 4.0 | 80 |
-| Serdde direct | large_string | encode | 102186.5 | 636.4 | 14.00 | 245807.0 | 4.1 | 68186 |
-| Serdde direct | large_string | decode | 35334.6 | 1840.3 | 8.00 | 522930.0 | 4.6 | 68186 |
-| Serdde direct | large_array | encode | 29727.6 | 765.7 | 13.00 | 61613.0 | 4.2 | 23868 |
-| Serdde direct | large_array | decode | 51363.2 | 443.2 | 21.00 | 347240.0 | 4.3 | 23868 |
-| Serdde direct | map | encode | 20296.6 | 363.4 | 12.00 | 30892.0 | 4.1 | 7734 |
-| Serdde direct | map | decode | 293577.7 | 25.1 | 2062.00 | 172658.0 | 4.1 | 7734 |
-| Serdde direct | enum | encode | 198.0 | 269.7 | 5.00 | 540.0 | 3.9 | 56 |
-| Serdde direct | enum | decode | 224.2 | 238.2 | 6.00 | 492.0 | 4.1 | 56 |
-| Serdde Value | small | encode | 5582.9 | 20.8 | 162.00 | 61828.0 | 3.9 | 122 |
-| Serdde Value | small | decode | 4259.3 | 27.3 | 98.00 | 28141.0 | 4.1 | 122 |
-| Serdde Value | nested | encode | 5930.1 | 12.9 | 285.00 | 41335.0 | 3.9 | 80 |
-| Serdde Value | nested | decode | 4337.0 | 17.6 | 204.00 | 28275.0 | 3.9 | 80 |
-| Serdde Value | large_string | encode | 113967.3 | 570.6 | 47.00 | 1134508.0 | 4.6 | 68186 |
-| Serdde Value | large_string | decode | 133810.7 | 486.0 | 41.00 | 1338057.0 | 4.6 | 68186 |
-| Serdde Value | large_array | encode | 213296260.0 | 0.1 | 12332.00 | 6448854687.0 | 8.8 | 23868 |
-| Serdde Value | large_array | decode | 562528.3 | 40.5 | 52.00 | 8101071.0 | 7.9 | 23868 |
-| Serdde Value | map | encode | 6413773.9 | 1.1 | 138559.00 | 51215218.0 | 4.5 | 7734 |
-| Serdde Value | map | decode | 272884.8 | 27.0 | 6198.00 | 1329557.0 | 4.6 | 7734 |
-| Serdde Value | enum | encode | 2805.2 | 19.0 | 142.00 | 21054.0 | 3.9 | 56 |
-| Serdde Value | enum | decode | 2261.3 | 23.6 | 93.00 | 13611.0 | 4.1 | 56 |
-| Rust Serde | small | encode | 88.6 | 1312.9 | 1.00 | 128.0 | 2.1 | 122 |
-| Rust Serde | small | decode | 312.6 | 372.2 | 8.00 | 626.0 | 2.1 | 122 |
-| Rust Serde | nested | encode | 55.4 | 1377.0 | 1.00 | 128.0 | 2.2 | 80 |
-| Rust Serde | nested | decode | 141.5 | 539.0 | 1.00 | 9.0 | 2.2 | 80 |
-| Rust Serde | large_string | encode | 28388.1 | 2290.6 | 3.00 | 204680.0 | 2.4 | 68186 |
-| Rust Serde | large_string | decode | 6589.9 | 9867.8 | 1.00 | 68172.0 | 2.4 | 68186 |
-| Rust Serde | large_array | encode | 15705.9 | 1449.3 | 9.00 | 65408.0 | 2.2 | 23868 |
-| Rust Serde | large_array | decode | 22812.4 | 997.8 | 11.00 | 65504.0 | 2.2 | 23868 |
-| Rust Serde | map | encode | 4971.3 | 1483.7 | 7.00 | 16256.0 | 2.2 | 7734 |
-| Rust Serde | map | decode | 37616.7 | 196.1 | 596.00 | 35442.0 | 2.2 | 7734 |
-| Rust Serde | enum | encode | 44.9 | 1189.2 | 1.00 | 128.0 | 2.2 | 56 |
-| Rust Serde | enum | decode | 78.0 | 684.4 | 0.00 | 0.0 | 2.1 | 56 |
-| yyjson | small | encode | 133.3 | 872.8 | 6.00 | 2227.0 | 3.5 | 122 |
-| yyjson | small | decode | 157.0 | 740.9 | 5.00 | 798.0 | 3.8 | 122 |
-| yyjson | nested | encode | 110.1 | 692.8 | 6.00 | 2025.0 | 3.5 | 80 |
-| yyjson | nested | decode | 61.7 | 1237.0 | 2.00 | 420.0 | 3.8 | 80 |
-| yyjson | large_string | encode | 11788.8 | 5516.0 | 6.00 | 546224.0 | 4.0 | 68186 |
-| yyjson | large_string | decode | 9484.0 | 6856.5 | 3.00 | 318315.0 | 3.7 | 68186 |
-| yyjson | large_array | encode | 12778.1 | 1781.4 | 12.00 | 294085.0 | 3.7 | 23868 |
-| yyjson | large_array | decode | 13774.7 | 1652.5 | 4.00 | 216080.0 | 3.7 | 23868 |
-| yyjson | map | encode | 4559.8 | 1617.5 | 15.00 | 83135.0 | 3.8 | 7734 |
-| yyjson | map | decode | 31485.9 | 234.3 | 514.00 | 65354.0 | 4.0 | 7734 |
-| yyjson | enum | encode | 88.8 | 601.4 | 5.00 | 1713.0 | 3.5 | 56 |
-| yyjson | enum | decode | 54.7 | 975.9 | 2.00 | 332.0 | 3.7 | 56 |
-| nlohmann/json | small | encode | 693.3 | 167.8 | 23.00 | 2463.0 | 3.6 | 122 |
-| nlohmann/json | small | decode | 1134.3 | 102.6 | 31.00 | 1863.0 | 3.6 | 122 |
-| nlohmann/json | nested | encode | 435.5 | 175.2 | 19.00 | 1558.0 | 3.6 | 80 |
-| nlohmann/json | nested | decode | 635.7 | 120.0 | 24.00 | 959.0 | 3.6 | 80 |
-| nlohmann/json | large_string | encode | 104753.8 | 620.8 | 16.00 | 330535.0 | 4.0 | 68186 |
-| nlohmann/json | large_string | decode | 250080.3 | 260.0 | 39.00 | 644424.0 | 4.0 | 68186 |
-| nlohmann/json | large_array | encode | 56688.4 | 401.5 | 30.00 | 258710.0 | 3.8 | 23868 |
-| nlohmann/json | large_array | decode | 161546.5 | 140.9 | 38.00 | 295095.0 | 4.0 | 23868 |
-| nlohmann/json | map | encode | 46230.6 | 159.5 | 537.00 | 88749.0 | 3.8 | 7734 |
-| nlohmann/json | map | decode | 75428.0 | 97.8 | 1045.00 | 94431.0 | 3.8 | 7734 |
-| nlohmann/json | enum | encode | 625.7 | 85.4 | 33.00 | 1813.0 | 3.6 | 56 |
-| nlohmann/json | enum | decode | 515.6 | 103.6 | 18.00 | 671.0 | 3.6 | 56 |
-| Glaze | small | encode | 40.0 | 2905.4 | 1.00 | 513.0 | 3.5 | 122 |
-| Glaze | small | decode | 152.6 | 762.4 | 8.00 | 314.0 | 3.7 | 122 |
-| Glaze | nested | encode | 27.0 | 2824.6 | 1.00 | 513.0 | 3.7 | 80 |
-| Glaze | nested | decode | 33.2 | 2295.9 | 0.00 | 0.0 | 3.5 | 80 |
-| Glaze | large_string | encode | 2835.3 | 22934.7 | 2.00 | 273244.0 | 4.0 | 68186 |
-| Glaze | large_string | decode | 27128.7 | 2397.0 | 1.00 | 68173.0 | 3.8 | 68186 |
-| Glaze | large_array | encode | 6993.9 | 3254.6 | 2.00 | 205846.0 | 4.0 | 23868 |
-| Glaze | large_array | decode | 13607.3 | 1672.8 | 13.00 | 65528.0 | 3.7 | 23868 |
-| Glaze | map | encode | 2984.3 | 2471.5 | 5.00 | 16019.0 | 3.7 | 7734 |
-| Glaze | map | decode | 28539.2 | 258.4 | 512.00 | 36864.0 | 3.7 | 7734 |
-| Glaze | enum | encode | 24.8 | 2153.2 | 1.00 | 513.0 | 3.5 | 56 |
-| Glaze | enum | decode | 26.9 | 1988.3 | 0.00 | 0.0 | 3.7 | 56 |
+| Serdde direct | small | encode | 336.4 | 345.9 | 6.00 | 646.0 | 3.8 | 122 |
+| Serdde direct | small | decode | 747.4 | 155.7 | 29.00 | 2330.0 | 4.3 | 122 |
+| Serdde direct | nested | encode | 273.1 | 279.3 | 7.00 | 1173.0 | 3.8 | 80 |
+| Serdde direct | nested | decode | 520.0 | 146.7 | 19.00 | 1052.0 | 4.0 | 80 |
+| Serdde direct | large_string | encode | 98604.7 | 659.5 | 14.00 | 245807.0 | 4.3 | 68186 |
+| Serdde direct | large_string | decode | 35997.6 | 1806.4 | 11.00 | 523146.0 | 4.6 | 68186 |
+| Serdde direct | large_array | encode | 29476.5 | 772.2 | 13.00 | 61613.0 | 4.1 | 23868 |
+| Serdde direct | large_array | decode | 51866.4 | 438.9 | 24.00 | 347456.0 | 4.5 | 23868 |
+| Serdde direct | map | encode | 20364.9 | 362.2 | 12.00 | 30892.0 | 4.2 | 7734 |
+| Serdde direct | map | decode | 67294.2 | 109.6 | 2067.00 | 181106.0 | 4.3 | 7734 |
+| Serdde direct | enum | encode | 204.0 | 261.8 | 5.00 | 540.0 | 4.0 | 56 |
+| Serdde direct | enum | decode | 339.1 | 157.5 | 13.00 | 852.0 | 4.0 | 56 |
+| Serdde Value | small | encode | 5549.2 | 21.0 | 162.00 | 61828.0 | 4.0 | 122 |
+| Serdde Value | small | decode | 4058.9 | 28.7 | 98.00 | 28141.0 | 4.0 | 122 |
+| Serdde Value | nested | encode | 5979.4 | 12.8 | 285.00 | 41335.0 | 3.8 | 80 |
+| Serdde Value | nested | decode | 4391.2 | 17.4 | 204.00 | 28275.0 | 4.0 | 80 |
+| Serdde Value | large_string | encode | 122455.6 | 531.0 | 47.00 | 1134508.0 | 4.6 | 68186 |
+| Serdde Value | large_string | decode | 128319.5 | 506.8 | 41.00 | 1338057.0 | 4.6 | 68186 |
+| Serdde Value | large_array | encode | 208760226.0 | 0.1 | 12332.00 | 6448854687.0 | 8.7 | 23868 |
+| Serdde Value | large_array | decode | 562978.7 | 40.4 | 52.00 | 8101071.0 | 7.8 | 23868 |
+| Serdde Value | map | encode | 6488755.6 | 1.1 | 138559.00 | 51215218.0 | 4.8 | 7734 |
+| Serdde Value | map | decode | 268727.2 | 27.4 | 6198.00 | 1329557.0 | 4.8 | 7734 |
+| Serdde Value | enum | encode | 2796.1 | 19.1 | 142.00 | 21054.0 | 4.1 | 56 |
+| Serdde Value | enum | decode | 2252.3 | 23.7 | 93.00 | 13611.0 | 4.0 | 56 |
+| Rust Serde | small | encode | 88.0 | 1321.9 | 1.00 | 128.0 | 2.2 | 122 |
+| Rust Serde | small | decode | 306.5 | 379.6 | 8.00 | 626.0 | 2.1 | 122 |
+| Rust Serde | nested | encode | 54.9 | 1388.5 | 1.00 | 128.0 | 2.2 | 80 |
+| Rust Serde | nested | decode | 140.0 | 544.9 | 1.00 | 9.0 | 2.2 | 80 |
+| Rust Serde | large_string | encode | 28556.3 | 2277.2 | 3.00 | 204680.0 | 2.4 | 68186 |
+| Rust Serde | large_string | decode | 6650.0 | 9778.5 | 1.00 | 68172.0 | 2.4 | 68186 |
+| Rust Serde | large_array | encode | 15441.7 | 1474.1 | 9.00 | 65408.0 | 2.1 | 23868 |
+| Rust Serde | large_array | decode | 21087.5 | 1079.4 | 11.00 | 65504.0 | 2.1 | 23868 |
+| Rust Serde | map | encode | 4865.9 | 1515.8 | 7.00 | 16256.0 | 2.1 | 7734 |
+| Rust Serde | map | decode | 36718.0 | 200.9 | 596.00 | 35442.0 | 2.2 | 7734 |
+| Rust Serde | enum | encode | 44.9 | 1188.8 | 1.00 | 128.0 | 2.1 | 56 |
+| Rust Serde | enum | decode | 78.9 | 676.6 | 0.00 | 0.0 | 2.1 | 56 |
+| yyjson | small | encode | 133.0 | 874.6 | 6.00 | 2227.0 | 3.7 | 122 |
+| yyjson | small | decode | 151.9 | 766.1 | 5.00 | 798.0 | 3.7 | 122 |
+| yyjson | nested | encode | 110.2 | 692.4 | 6.00 | 2025.0 | 3.5 | 80 |
+| yyjson | nested | decode | 62.1 | 1227.8 | 2.00 | 420.0 | 3.7 | 80 |
+| yyjson | large_string | encode | 11363.2 | 5722.6 | 6.00 | 546224.0 | 4.0 | 68186 |
+| yyjson | large_string | decode | 9395.8 | 6920.9 | 3.00 | 318315.0 | 4.0 | 68186 |
+| yyjson | large_array | encode | 12556.3 | 1812.8 | 12.00 | 294085.0 | 3.7 | 23868 |
+| yyjson | large_array | decode | 14204.9 | 1602.4 | 4.00 | 216080.0 | 3.7 | 23868 |
+| yyjson | map | encode | 4557.0 | 1618.5 | 15.00 | 83135.0 | 3.7 | 7734 |
+| yyjson | map | decode | 31367.0 | 235.1 | 514.00 | 65354.0 | 4.0 | 7734 |
+| yyjson | enum | encode | 88.8 | 601.7 | 5.00 | 1713.0 | 3.8 | 56 |
+| yyjson | enum | decode | 54.9 | 973.3 | 2.00 | 332.0 | 3.8 | 56 |
+| nlohmann/json | small | encode | 686.1 | 169.6 | 23.00 | 2463.0 | 3.5 | 122 |
+| nlohmann/json | small | decode | 1109.1 | 104.9 | 31.00 | 1863.0 | 3.5 | 122 |
+| nlohmann/json | nested | encode | 454.4 | 167.9 | 19.00 | 1558.0 | 3.5 | 80 |
+| nlohmann/json | nested | decode | 628.0 | 121.5 | 24.00 | 959.0 | 3.5 | 80 |
+| nlohmann/json | large_string | encode | 105804.6 | 614.6 | 16.00 | 330535.0 | 4.0 | 68186 |
+| nlohmann/json | large_string | decode | 255121.8 | 254.9 | 39.00 | 644424.0 | 4.0 | 68186 |
+| nlohmann/json | large_array | encode | 55739.3 | 408.4 | 30.00 | 258710.0 | 3.8 | 23868 |
+| nlohmann/json | large_array | decode | 160619.4 | 141.7 | 38.00 | 295095.0 | 4.0 | 23868 |
+| nlohmann/json | map | encode | 47286.6 | 156.0 | 537.00 | 88749.0 | 3.8 | 7734 |
+| nlohmann/json | map | decode | 76209.0 | 96.8 | 1045.00 | 94431.0 | 3.8 | 7734 |
+| nlohmann/json | enum | encode | 635.5 | 84.0 | 33.00 | 1813.0 | 3.5 | 56 |
+| nlohmann/json | enum | decode | 518.7 | 103.0 | 18.00 | 671.0 | 3.6 | 56 |
+| Glaze | small | encode | 39.2 | 2967.8 | 1.00 | 513.0 | 3.5 | 122 |
+| Glaze | small | decode | 158.7 | 733.2 | 8.00 | 314.0 | 3.5 | 122 |
+| Glaze | nested | encode | 27.2 | 2808.7 | 1.00 | 513.0 | 3.8 | 80 |
+| Glaze | nested | decode | 32.0 | 2385.3 | 0.00 | 0.0 | 3.5 | 80 |
+| Glaze | large_string | encode | 2850.8 | 22809.8 | 2.00 | 273244.0 | 4.2 | 68186 |
+| Glaze | large_string | decode | 25085.0 | 2592.3 | 1.00 | 68173.0 | 3.7 | 68186 |
+| Glaze | large_array | encode | 6908.7 | 3294.7 | 2.00 | 205846.0 | 4.0 | 23868 |
+| Glaze | large_array | decode | 13217.9 | 1722.1 | 13.00 | 65528.0 | 3.7 | 23868 |
+| Glaze | map | encode | 3003.9 | 2455.4 | 5.00 | 16019.0 | 4.0 | 7734 |
+| Glaze | map | decode | 28899.9 | 255.2 | 512.00 | 36864.0 | 3.7 | 7734 |
+| Glaze | enum | encode | 25.4 | 2102.7 | 1.00 | 513.0 | 3.5 | 56 |
+| Glaze | enum | decode | 26.8 | 1989.3 | 0.00 | 0.0 | 3.8 | 56 |
 
 Malformed-input rejection:
 
 | implementation | ns/rejection | alloc/rejection | allocated B/rejection |
 | --- | ---: | ---: | ---: |
-| Serdde direct | 130.6 | 7.00 | 458.0 |
-| Serdde Value | 510.1 | 15.00 | 945.0 |
-| Rust Serde | 138.4 | 5.00 | 143.0 |
-| yyjson | 30.8 | 2.00 | 202.0 |
-| nlohmann/json | 3689.4 | 20.00 | 1017.0 |
-| Glaze | 14.1 | 0.00 | 0.0 |
+| Serdde direct | 126.7 | 7.00 | 514.0 |
+| Serdde Value | 486.2 | 15.00 | 945.0 |
+| Rust Serde | 138.9 | 5.00 | 143.0 |
+| yyjson | 31.9 | 2.00 | 202.0 |
+| nlohmann/json | 3787.0 | 20.00 | 1017.0 |
+| Glaze | 14.2 | 0.00 | 0.0 |
 
 ## CBOR
 
@@ -198,8 +198,8 @@ Malformed-input rejection:
 
 | artifact | bytes | generated lines |
 | --- | ---: | ---: |
-| Serdde direct | 1042016 |  |
-| Serdde Value | 1042016 |  |
+| Serdde direct | 1053240 |  |
+| Serdde Value | 1053240 |  |
 | Rust Serde | 829840 |  |
 | yyjson | 333664 |  |
 | nlohmann/json | 277488 |  |

@@ -34,3 +34,7 @@ kind = "executable"
 [targets.variant]
 entry = "tests/variant_main.dd"
 kind = "executable"
+
+[targets.json]
+entry = "tests/json_main.dd"
+kind = "executable"

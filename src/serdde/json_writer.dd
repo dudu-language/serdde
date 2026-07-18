@@ -1,12 +1,16 @@
+from cpp.path import json_native.hpp
 from serdde.error import SerddeError
 from serdde.error import type_error
 from serdde.value import Value
 from serdde.value import ValueKind
 
 
-def write_escaped(output: &str, value: str):
+def write_escaped(output: &str, value: str) -> Result[bool, SerddeError]:
+    if not serdde_json_native.valid_utf8(value):
+        return Err(type_error("string is not valid UTF-8"))
     output += char(34)
     for ch in value:
+        byte = u32(u8(ch))
         if ch == char(34):
             output += char(92)
             output += char(34)
@@ -28,9 +32,15 @@ def write_escaped(output: &str, value: str):
         elif ch == char(9):
             output += char(92)
             output += char(116)
+        elif byte < 32:
+            digits = "0123456789abcdef"
+            output += "\\u00"
+            output += digits[(byte >> 4) & 0xf]
+            output += digits[byte & 0xf]
         else:
             output += ch
     output += char(34)
+    return Ok(True)
 
 
 def write_value(output: &str, value: &const[Value]) -> Result[bool, SerddeError]:
@@ -47,9 +57,19 @@ def write_value(output: &str, value: &const[Value]) -> Result[bool, SerddeError]
         case ValueKind.U64:
             output += str(value.u64_value)
         case ValueKind.F64:
-            output += str(value.f64_value)
+            if not serdde_json_native.finite_f64(value.f64_value):
+                return Err(type_error("JSON cannot encode a non-finite float"))
+            encoded = serdde_json_native.format_f64(value.f64_value)
+            if encoded == "":
+                return Err(type_error("failed to format floating-point value"))
+            output += encoded
         case ValueKind.String:
-            write_escaped(output, value.string_value)
+            escaped = write_escaped(output, value.string_value)
+            match escaped:
+                case Err(error):
+                    return Err(error)
+                case Ok(_):
+                    pass
         case ValueKind.Sequence:
             output += char(91)
             i: usize = 0
@@ -71,7 +91,12 @@ def write_value(output: &str, value: &const[Value]) -> Result[bool, SerddeError]
                 if i > 0:
                     output += char(44)
                 key = value.object_order[i]
-                write_escaped(output, key)
+                escaped = write_escaped(output, key)
+                match escaped:
+                    case Err(error):
+                        return Err(error.at_field(key))
+                    case Ok(_):
+                        pass
                 output += char(58)
                 child = write_value(output, value.object_value.at(key))
                 match child:

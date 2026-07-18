@@ -19,6 +19,16 @@ class Value:
     sequence_value: list[Value] = []
     object_value: dict[str, Value] = {}
     object_order: list[str] = []
+    line: usize = 0
+    column: usize = 0
+    offset: usize = 0
+
+    def with_source(self, line: usize, column: usize, offset: usize) -> Value:
+        next = self
+        next.line = line
+        next.column = column
+        next.offset = offset
+        return next
 
     def has_field(self: &const[Self], name: str) -> bool:
         return self.object_value.contains(name)

@@ -1,0 +1,242 @@
+from cpp.path import json_test_native.hpp
+from serdde.error import ErrorKind
+from serdde.json import dumps
+from serdde.json import dumps_value
+from serdde.json import loads
+from serdde.json_parser import parse_json
+from serdde.macros import Serde
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import f64_value
+from serdde.value import string_value
+
+
+@derive(Serde)
+class JsonAddress:
+    city: str
+    postal_code: i32
+
+
+@derive(Serde)
+class JsonRecord:
+    name: str
+    active: bool
+    address: JsonAddress
+    scores: list[i32]
+
+
+def rejected(source: str) -> bool:
+    result = parse_json(source)
+    match result:
+        case Ok(_):
+            return False
+        case Err(_):
+            return True
+
+
+def fail(name: str, code: i32) -> i32:
+    print("json test failed: " + name)
+    return code
+
+
+def main() -> i32:
+    precise = parse_json("0.12345678901234566")
+    match precise:
+        case Err(_):
+            return fail("precise float parse", 1)
+        case Ok(value):
+            if value.kind != ValueKind.F64:
+                return fail("precise float kind", 2)
+            encoded = dumps_value(value)
+            match encoded:
+                case Err(_):
+                    return fail("precise float write", 3)
+                case Ok(text):
+                    reparsed = parse_json(text)
+                    match reparsed:
+                        case Err(_):
+                            return fail("precise float reparse", 4)
+                        case Ok(roundtrip):
+                            if roundtrip.f64_value != value.f64_value:
+                                return fail("precise float roundtrip", 5)
+
+    one = parse_json("1.0")
+    match one:
+        case Err(_):
+            return fail("float category parse", 6)
+        case Ok(value):
+            if value.kind != ValueKind.F64:
+                return fail("float category kind", 7)
+            encoded = dumps_value(value)
+            match encoded:
+                case Err(_):
+                    return fail("float category write", 8)
+                case Ok(text):
+                    if text != "1.0":
+                        return fail("float category spelling", 9)
+
+    signed_min = parse_json("-9223372036854775808")
+    match signed_min:
+        case Err(_):
+            return fail("i64 minimum", 10)
+        case Ok(value):
+            if value.kind != ValueKind.I64:
+                return fail("i64 minimum kind", 11)
+
+    signed_max = parse_json("9223372036854775807")
+    match signed_max:
+        case Err(_):
+            return fail("i64 maximum", 12)
+        case Ok(value):
+            if value.kind != ValueKind.I64:
+                return fail("i64 maximum kind", 13)
+
+    unsigned_max = parse_json("18446744073709551615")
+    match unsigned_max:
+        case Err(_):
+            return fail("u64 maximum", 14)
+        case Ok(value):
+            if value.kind != ValueKind.U64:
+                return fail("u64 maximum kind", 15)
+            encoded = dumps_value(value)
+            match encoded:
+                case Err(_):
+                    return fail("u64 maximum write", 16)
+                case Ok(text):
+                    if text != "18446744073709551615":
+                        return fail("u64 maximum spelling", 17)
+
+    invalid_numbers: list[str] = [
+        "18446744073709551616",
+        "-9223372036854775809",
+        "1e400",
+        "01",
+        "1.",
+        "1e",
+        "1e+",
+        "-",
+    ]
+    for source in invalid_numbers:
+        if not rejected(source):
+            return fail("invalid number " + source, 18)
+
+    escapes = parse_json("\"quote: \\\" slash: \\\\ tab: \\t music: \\ud834\\udd1e\"")
+    match escapes:
+        case Err(_):
+            return fail("escape parse", 19)
+        case Ok(value):
+            encoded = dumps_value(value)
+            match encoded:
+                case Err(_):
+                    return fail("escape write", 20)
+                case Ok(text):
+                    reparsed = parse_json(text)
+                    match reparsed:
+                        case Err(_):
+                            return fail("escape reparse", 21)
+                        case Ok(roundtrip):
+                            if roundtrip.string_value != value.string_value:
+                                return fail("escape roundtrip", 22)
+
+    invalid_strings: list[str] = [
+        "\"\\ud800\"",
+        "\"\\udc00\"",
+        "\"\\ud800\\u0041\"",
+        "\"\\x20\"",
+    ]
+    for source in invalid_strings:
+        if not rejected(source):
+            return fail("invalid string", 23)
+
+    malformed_utf8 = "\"" + serdde_json_test.invalid_utf8() + "\""
+    if not rejected(malformed_utf8):
+        return fail("invalid UTF-8 parse", 24)
+    invalid_write = dumps_value(string_value(serdde_json_test.invalid_utf8()))
+    match invalid_write:
+        case Ok(_):
+            return fail("invalid UTF-8 write", 25)
+        case Err(error):
+            if error.format != "json":
+                return fail("invalid UTF-8 format", 26)
+
+    nonfinite = dumps_value(f64_value(serdde_json_test.infinity()))
+    match nonfinite:
+        case Ok(_):
+            return fail("non-finite float", 27)
+        case Err(error):
+            if error.kind != ErrorKind.Type:
+                return fail("non-finite error kind", 28)
+
+    invalid_documents: list[str] = [
+        "{\"a\":1,}",
+        "[1,]",
+        "{\"a\":1,\"a\":2}",
+        "true false",
+        "{a:1}",
+    ]
+    for source in invalid_documents:
+        if not rejected(source):
+            return fail("invalid document", 29)
+
+    located = parse_json("{\n  \"outer\": {\n    \"value\": \"wrong\"\n  }\n}")
+    match located:
+        case Err(_):
+            return fail("located source parse", 30)
+        case Ok(root):
+            child = root.field("outer").field("value")
+            if child.line != 3 or child.column != 14:
+                return fail("value source location", 31)
+
+    typed_source = "{\n"
+    typed_source += "  \"name\": \"Ada\",\n"
+    typed_source += "  \"active\": true,\n"
+    typed_source += "  \"address\": {\"city\": \"London\", \"postal_code\": \"bad\"},\n"
+    typed_source += "  \"scores\": [1, 2]\n"
+    typed_source += "}"
+    typed_bad = loads[JsonRecord](typed_source)
+    match typed_bad:
+        case Ok(_):
+            return fail("typed conversion rejection", 32)
+        case Err(error):
+            if error.path_string() != "$.address.postal_code":
+                return fail("typed conversion path", 33)
+            if error.line != 4 or error.format != "json":
+                return fail("typed conversion location", 34)
+
+    record = JsonRecord(
+        name="Ada",
+        active=True,
+        address=JsonAddress(city="London", postal_code=42),
+        scores=[2, 3, 5],
+    )
+    record_text = dumps(record)
+    match record_text:
+        case Err(_):
+            return fail("typed write", 35)
+        case Ok(text):
+            decoded = loads[JsonRecord](text)
+            match decoded:
+                case Err(_):
+                    return fail("typed read", 36)
+                case Ok(value):
+                    if value.name != "Ada" or value.address.postal_code != 42:
+                        return fail("typed roundtrip", 37)
+                    if len(value.scores) != 3 or value.scores[2] != 5:
+                        return fail("typed list roundtrip", 38)
+
+    depth_ok: str = ""
+    i: i32 = 0
+    while i < 128:
+        depth_ok += "["
+        i += 1
+    depth_ok += "0"
+    i = 0
+    while i < 128:
+        depth_ok += "]"
+        i += 1
+    if rejected(depth_ok):
+        return fail("depth boundary", 39)
+    if not rejected("[" + depth_ok + "]"):
+        return fail("depth limit", 40)
+
+    return 0

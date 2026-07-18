@@ -29,6 +29,18 @@ class SerddeError:
     format: str = ""
     cause: str = ""
 
+    def with_format(self, name: str) -> SerddeError:
+        next = self
+        next.format = name
+        return next
+
+    def with_source(self, line: usize, column: usize, offset: usize) -> SerddeError:
+        next = self
+        next.line = line
+        next.column = column
+        next.offset = offset
+        return next
+
     def at_field(self, name: str) -> SerddeError:
         next = self
         path: list[PathSegment] = [PathSegment(kind=PathKind.Field, field=name)]

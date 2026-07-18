@@ -1,12 +1,69 @@
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.error import PathKind
 from serdde.error import SerddeError
 from serdde.json_parser import parse_json
 from serdde.json_writer import write_json
 from serdde.value import Value
+from serdde.value import ValueKind
 
 
 def loads(source: str) -> Result[Value, SerddeError]:
     return parse_json(source)
 
 
+def value_at_error_path(root: &const[Value], error: &const[SerddeError]) -> Value:
+    current: Value = root
+    for segment in error.path:
+        match segment.kind:
+            case PathKind.Field:
+                if current.kind != ValueKind.Object or not current.has_field(segment.field):
+                    return current
+                next: Value = current.field(segment.field)
+                current = next
+            case PathKind.Index:
+                if current.kind != ValueKind.Sequence or segment.index >= len(current.sequence_value):
+                    return current
+                next: Value = current.sequence_value[segment.index]
+                current = next
+    return current
+
+
+def json_conversion_error(error: SerddeError, root: &const[Value]) -> SerddeError:
+    result = error.with_format("json")
+    if result.line == 0:
+        source = value_at_error_path(root, result)
+        result = result.with_source(source.line, source.column, source.offset)
+    return result
+
+
+def loads[T](source: str) -> Result[T, SerddeError]:
+    parsed = parse_json(source)
+    match parsed:
+        case Err(error):
+            return Err(error)
+        case Ok(value):
+            decoded = from_value[T](value)
+            match decoded:
+                case Err(error):
+                    return Err(json_conversion_error(error, value))
+                case Ok(ready):
+                    return Ok(ready)
+
+
 def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
-    return write_json(value)
+    encoded = write_json(value)
+    match encoded:
+        case Err(error):
+            return Err(error.with_format("json"))
+        case Ok(text):
+            return Ok(text)
+
+
+def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
+    converted = to_value(value)
+    match converted:
+        case Err(error):
+            return Err(error.with_format("json"))
+        case Ok(ready):
+            return dumps_value(ready)

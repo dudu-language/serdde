@@ -1,3 +1,4 @@
+from cpp.path import json_native.hpp
 from serdde.error import SerddeError
 from serdde.error import syntax_error
 from serdde.value import Value
@@ -39,7 +40,20 @@ class JsonParser:
         return value
 
     def fail(self, message: str) -> SerddeError:
-        return syntax_error(message, self.line, self.column, self.offset)
+        return syntax_error(message, self.line, self.column, self.offset).with_format("json")
+
+    def located(
+        self,
+        result: Result[Value, SerddeError],
+        line: usize,
+        column: usize,
+        offset: usize,
+    ) -> Result[Value, SerddeError]:
+        match result:
+            case Err(error):
+                return Err(error)
+            case Ok(value):
+                return Ok(value.with_source(line, column, offset))
 
     def skip_space(self):
         while not self.done():
@@ -148,8 +162,10 @@ class JsonParser:
         while not self.done():
             value = self.advance()
             if value == char(34):
+                if not serdde_json_native.valid_utf8(output):
+                    return Err(self.fail("string is not valid UTF-8"))
                 return Ok(output)
-            if value < char(32):
+            if u32(u8(value)) < 32:
                 return Err(self.fail("control character in string"))
             if value != char(92):
                 output += value
@@ -181,13 +197,14 @@ class JsonParser:
         return Err(self.fail("unterminated string"))
 
     def number(self) -> Result[Value, SerddeError]:
+        start_offset = self.offset
         negative = False
         if self.peek() == char(45):
             negative = True
             self.advance()
         if self.done():
             return Err(self.fail("incomplete number"))
-        integer: u64 = 0
+
         digits: usize = 0
         if self.peek() == char(48):
             self.advance()
@@ -196,67 +213,61 @@ class JsonParser:
                 return Err(self.fail("leading zero in number"))
         else:
             while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
-                digit = u64(self.advance()) - u64(char(48))
-                if integer > (0xffffffffffffffff - digit) / 10:
-                    return Err(self.fail("integer is out of range"))
-                integer = integer * 10 + digit
+                self.advance()
                 digits += 1
         if digits == 0:
             return Err(self.fail("number requires a digit"))
-        fraction: f64 = 0.0
-        scale: f64 = 1.0
+
         floating = False
         if not self.done() and self.peek() == char(46):
             floating = True
             self.advance()
             fraction_digits: usize = 0
             while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
-                scale *= 10.0
-                fraction = fraction + f64(u64(self.advance()) - u64(char(48))) / scale
+                self.advance()
                 fraction_digits += 1
             if fraction_digits == 0:
                 return Err(self.fail("fraction requires a digit"))
-        exponent: i32 = 0
-        exponent_negative = False
+
         if not self.done() and (self.peek() == char(101) or self.peek() == char(69)):
             floating = True
             self.advance()
             if not self.done() and (self.peek() == char(43) or self.peek() == char(45)):
-                exponent_negative = self.advance() == char(45)
+                self.advance()
             exponent_digits: usize = 0
             while not self.done() and self.peek() >= char(48) and self.peek() <= char(57):
-                if exponent < 10000:
-                    exponent = exponent * 10 + i32(u32(self.advance()) - u32(char(48)))
-                else:
-                    self.advance()
+                self.advance()
                 exponent_digits += 1
             if exponent_digits == 0:
                 return Err(self.fail("exponent requires a digit"))
+
+        text: str = ""
+        i = start_offset
+        while i < self.offset:
+            text += self.source[i]
+            i += 1
+
         if floating:
-            result = f64(integer) + fraction
-            factor: f64 = 1.0
-            i: i32 = 0
-            while i < exponent:
-                factor *= 10.0
-                i += 1
-            if exponent_negative:
-                result /= factor
-            else:
-                result *= factor
-            if negative:
-                result = -result
+            result: f64 = 0.0
+            if not serdde_json_native.parse_f64(text, &result):
+                return Err(self.fail("floating-point number is out of range"))
             return Ok(f64_value(result))
         if negative:
-            if integer > 0x8000000000000000:
+            signed: i64 = 0
+            if not serdde_json_native.parse_i64(text, &signed):
                 return Err(self.fail("signed integer is out of range"))
-            if integer == 0x8000000000000000:
-                return Ok(i64_value(-i64(0x7fffffffffffffff) - i64(1)))
-            return Ok(i64_value(-i64(integer)))
-        if integer <= 0x7fffffffffffffff:
-            return Ok(i64_value(i64(integer)))
-        return Ok(u64_value(integer))
+            return Ok(i64_value(signed))
+        signed: i64 = 0
+        if serdde_json_native.parse_i64(text, &signed):
+            return Ok(i64_value(signed))
+        unsigned: u64 = 0
+        if serdde_json_native.parse_u64(text, &unsigned):
+            return Ok(u64_value(unsigned))
+        return Err(self.fail("unsigned integer is out of range"))
 
-    def array(self) -> Result[Value, SerddeError]:
+    def array(self, depth: usize) -> Result[Value, SerddeError]:
+        if depth >= 128:
+            return Err(self.fail("JSON nesting depth exceeds 128"))
         self.advance()
         self.skip_space()
         values: list[Value] = []
@@ -264,7 +275,7 @@ class JsonParser:
             self.advance()
             return Ok(sequence_value(values))
         while True:
-            item = self.value()
+            item = self.value(depth + 1)
             match item:
                 case Ok(value):
                     values.append(value)
@@ -283,7 +294,9 @@ class JsonParser:
             self.skip_space()
         return Err(self.fail("unterminated array"))
 
-    def object(self) -> Result[Value, SerddeError]:
+    def object(self, depth: usize) -> Result[Value, SerddeError]:
+        if depth >= 128:
+            return Err(self.fail("JSON nesting depth exceeds 128"))
         self.advance()
         self.skip_space()
         output = empty_object_value()
@@ -310,7 +323,7 @@ class JsonParser:
                 case Ok(_):
                     pass
             self.skip_space()
-            item = self.value()
+            item = self.value(depth + 1)
             match item:
                 case Ok(value):
                     output.set_field(key, value)
@@ -329,10 +342,13 @@ class JsonParser:
             self.skip_space()
         return Err(self.fail("unterminated object"))
 
-    def value(self) -> Result[Value, SerddeError]:
+    def value(self, depth: usize) -> Result[Value, SerddeError]:
         self.skip_space()
         if self.done():
             return Err(self.fail("expected a JSON value"))
+        start_line = self.line
+        start_column = self.column
+        start_offset = self.offset
         lead = self.peek()
         if lead == char(110):
             consumed = self.consume_word("null")
@@ -340,40 +356,40 @@ class JsonParser:
                 case Err(error):
                     return Err(error)
                 case Ok(_):
-                    return Ok(null_value())
+                    return Ok(null_value().with_source(start_line, start_column, start_offset))
         if lead == char(116):
             consumed = self.consume_word("true")
             match consumed:
                 case Err(error):
                     return Err(error)
                 case Ok(_):
-                    return Ok(bool_value(True))
+                    return Ok(bool_value(True).with_source(start_line, start_column, start_offset))
         if lead == char(102):
             consumed = self.consume_word("false")
             match consumed:
                 case Err(error):
                     return Err(error)
                 case Ok(_):
-                    return Ok(bool_value(False))
+                    return Ok(bool_value(False).with_source(start_line, start_column, start_offset))
         if lead == char(34):
             parsed = self.string()
             match parsed:
                 case Ok(value):
-                    return Ok(string_value(value))
+                    return Ok(string_value(value).with_source(start_line, start_column, start_offset))
                 case Err(error):
                     return Err(error)
         if lead == char(91):
-            return self.array()
+            return self.located(self.array(depth), start_line, start_column, start_offset)
         if lead == char(123):
-            return self.object()
+            return self.located(self.object(depth), start_line, start_column, start_offset)
         if lead == char(45) or (lead >= char(48) and lead <= char(57)):
-            return self.number()
+            return self.located(self.number(), start_line, start_column, start_offset)
         return Err(self.fail("unexpected character while reading value"))
 
 
 def parse_json(source: str) -> Result[Value, SerddeError]:
     parser = JsonParser(source=source)
-    result = parser.value()
+    result = parser.value(0)
     match result:
         case Err(error):
             return Err(error)

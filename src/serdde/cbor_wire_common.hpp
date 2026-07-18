@@ -135,17 +135,30 @@ inline bool parse_container(std::string_view source, std::size_t depth,
                   "CBOR object keys must be strings or unsigned integers");
     }
     if (validate) {
-      for (const Node &previous : keys) {
-        if (same_key(source, previous, child)) {
-          return fail(error, child.begin, "duplicate CBOR object key");
-        }
-      }
       keys.push_back(child);
     }
     if (!parse_node(source, cursor, depth + 1, child, error, validate)) {
       return false;
     }
     cursor = child.end;
+  }
+  if (validate && node.major == 5) {
+    std::sort(keys.begin(), keys.end(), [&](const Node &left, const Node &right) {
+      if (left.major != right.major) {
+        return left.major < right.major;
+      }
+      if (left.major == 0) {
+        return left.argument < right.argument;
+      }
+      return source.substr(left.payload, static_cast<std::size_t>(left.argument)) <
+             source.substr(right.payload, static_cast<std::size_t>(right.argument));
+    });
+    for (std::size_t index = 1; index < keys.size(); ++index) {
+      if (same_key(source, keys[index - 1], keys[index])) {
+        return fail(error, std::max(keys[index - 1].begin, keys[index].begin),
+                    "duplicate CBOR object key");
+      }
+    }
   }
   node.end = cursor;
   return true;

@@ -10,16 +10,25 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace serdde_wire {
 
 namespace cbor_detail {
 
 struct Document {
+  struct ChildRange {
+    std::size_t begin = 0;
+    std::size_t count = 0;
+  };
+
   std::string_view source;
   Node root;
   Error error;
+  std::vector<Node> children;
+  std::unordered_map<std::size_t, ChildRange> child_ranges;
 
   explicit Document(const std::string &input) : source(input) {
     if (!parse_node(source, 0, 0, root, error, true)) {
@@ -29,10 +38,48 @@ struct Document {
     if (root.end != source.size()) {
       fail(error, root.end, "trailing data after CBOR root value");
       root = Node{};
+      return;
     }
+    index_children(root);
   }
 
   bool valid() const { return error.message.empty(); }
+
+  const Node *child(const Node &parent, std::size_t index) const {
+    const auto range = child_ranges.find(parent.begin);
+    if (range == child_ranges.end() || index >= range->second.count) {
+      return nullptr;
+    }
+    return &children[range->second.begin + index];
+  }
+
+private:
+  void index_children(const Node &parent) {
+    if (parent.major != 4 && parent.major != 5) {
+      return;
+    }
+    const std::size_t multiplier = parent.major == 5 ? 2 : 1;
+    if (parent.argument > std::numeric_limits<std::size_t>::max() / multiplier) {
+      return;
+    }
+    const std::size_t count = static_cast<std::size_t>(parent.argument) * multiplier;
+    const std::size_t first = children.size();
+    std::size_t cursor = parent.payload;
+    for (std::size_t index = 0; index < count; ++index) {
+      Node child_node;
+      Error ignored;
+      if (!parse_node(source, cursor, 0, child_node, ignored, false)) {
+        return;
+      }
+      children.push_back(child_node);
+      cursor = child_node.end;
+    }
+    child_ranges.emplace(parent.begin, ChildRange{first, count});
+    for (std::size_t index = 0; index < count; ++index) {
+      const Node child_node = children[first + index];
+      index_children(child_node);
+    }
+  }
 };
 
 } // namespace cbor_detail
@@ -232,23 +279,15 @@ private:
              cbor_detail::Node node)
       : document_(std::move(document)), node_(node), valid_(true) {}
 
-  bool read_node(std::size_t offset, cbor_detail::Node &node) const {
-    cbor_detail::Error ignored;
-    return cbor_detail::parse_node(document_->source, offset, 0, node, ignored,
-                                   false);
-  }
-
   bool sequence_element(std::size_t index, cbor_detail::Node &output) const {
     if (node_.major != 4 || index >= node_.argument) {
       return false;
     }
-    std::size_t cursor = node_.payload;
-    for (std::size_t current = 0; current <= index; ++current) {
-      if (!read_node(cursor, output)) {
-        return false;
-      }
-      cursor = output.end;
+    const cbor_detail::Node *child = document_->child(node_, index);
+    if (child == nullptr) {
+      return false;
     }
+    output = *child;
     return true;
   }
 
@@ -257,17 +296,13 @@ private:
     if (node_.major != 5 || index >= node_.argument) {
       return false;
     }
-    std::size_t cursor = node_.payload;
-    for (std::size_t current = 0; current <= index; ++current) {
-      if (!read_node(cursor, key_node)) {
-        return false;
-      }
-      cursor = key_node.end;
-      if (!read_node(cursor, value_node)) {
-        return false;
-      }
-      cursor = value_node.end;
+    const cbor_detail::Node *key = document_->child(node_, index * 2);
+    const cbor_detail::Node *value = document_->child(node_, index * 2 + 1);
+    if (key == nullptr || value == nullptr) {
+      return false;
     }
+    key_node = *key;
+    value_node = *value;
     return true;
   }
 
@@ -275,19 +310,13 @@ private:
     if (!valid_ || node_.major != 5) {
       return;
     }
-    std::size_t cursor = node_.payload;
     for (std::uint64_t index = 0; index < node_.argument; ++index) {
-      cbor_detail::Node key_node;
-      cbor_detail::Node value_node;
-      if (!read_node(cursor, key_node)) {
+      const cbor_detail::Node *key_node = document_->child(node_, index * 2);
+      const cbor_detail::Node *value_node = document_->child(node_, index * 2 + 1);
+      if (key_node == nullptr || value_node == nullptr) {
         return;
       }
-      cursor = key_node.end;
-      if (!read_node(cursor, value_node)) {
-        return;
-      }
-      cursor = value_node.end;
-      visitor(key_node, value_node);
+      visitor(*key_node, *value_node);
     }
   }
 

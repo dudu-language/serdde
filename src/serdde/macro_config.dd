@@ -1,0 +1,191 @@
+import dudu.ast as ast
+
+
+def ascii_lower(ch: char) -> char:
+    if ch >= char(65) and ch <= char(90):
+        return char(u32(ch) + 32)
+    return ch
+
+
+def ascii_upper(ch: char) -> char:
+    if ch >= char(97) and ch <= char(122):
+        return char(u32(ch) - 32)
+    return ch
+
+
+def is_ascii_upper(ch: char) -> bool:
+    return ch >= char(65) and ch <= char(90)
+
+
+def is_ascii_lower(ch: char) -> bool:
+    return ch >= char(97) and ch <= char(122)
+
+
+def is_ascii_digit(ch: char) -> bool:
+    return ch >= char(48) and ch <= char(57)
+
+
+def append_word(words: &list[str], word: str):
+    if word != "":
+        words.append(word)
+
+
+def identifier_words(name: str) -> list[str]:
+    words: list[str] = []
+    current: str = ""
+    i: usize = 0
+    while i < len(name):
+        ch = name[i]
+        if ch == char(95) or ch == char(45):
+            append_word(words, current)
+            current = ""
+            i += 1
+            continue
+        if is_ascii_upper(ch) and current != "":
+            previous = name[i - 1]
+            next_is_lower = i + 1 < len(name) and is_ascii_lower(name[i + 1])
+            if is_ascii_lower(previous) or is_ascii_digit(previous) or next_is_lower:
+                append_word(words, current)
+                current = ""
+        current += ascii_lower(ch)
+        i += 1
+    append_word(words, current)
+    return words
+
+
+def capitalized(word: str) -> str:
+    if word == "":
+        return word
+    result: str = ""
+    result += ascii_upper(word[0])
+    i: usize = 1
+    while i < len(word):
+        result += ascii_lower(word[i])
+        i += 1
+    return result
+
+
+def joined(words: list[str], separator: str, uppercase: bool) -> str:
+    result: str = ""
+    i: usize = 0
+    while i < len(words):
+        if i > 0:
+            result += separator
+        for ch in words[i]:
+            if uppercase:
+                result += ascii_upper(ch)
+            else:
+                result += ascii_lower(ch)
+        i += 1
+    return result
+
+
+def valid_rename_rule(rule: str) -> bool:
+    return (
+        rule == ""
+        or rule == "snake_case"
+        or rule == "camelCase"
+        or rule == "PascalCase"
+        or rule == "kebab-case"
+        or rule == "SCREAMING_SNAKE_CASE"
+    )
+
+
+def renamed(name: str, rule: str) -> str:
+    if rule == "":
+        return name
+    words = identifier_words(name)
+    if rule == "snake_case":
+        return joined(words, "_", False)
+    if rule == "kebab-case":
+        return joined(words, "-", False)
+    if rule == "SCREAMING_SNAKE_CASE":
+        return joined(words, "_", True)
+    result: str = ""
+    i: usize = 0
+    while i < len(words):
+        if rule == "camelCase" and i == 0:
+            result += words[i]
+        else:
+            result += capitalized(words[i])
+        i += 1
+    return result
+
+
+def snake_name(name: str) -> str:
+    return renamed(name, "snake_case")
+
+
+def option_attribute(attributes: &const[list[ast.Attribute]]) -> Option[ast.Attribute]:
+    return ast.find_attribute(attributes, "Serde")
+
+
+def string_option(
+    attributes: &const[list[ast.Attribute]],
+    name: str,
+    fallback: str,
+) -> str:
+    options = option_attribute(attributes)
+    if not options.has_value():
+        return fallback
+    return ast.string_argument(options.value(), name, fallback)
+
+
+def bool_option(
+    attributes: &const[list[ast.Attribute]],
+    name: str,
+    fallback: bool,
+) -> bool:
+    options = option_attribute(attributes)
+    if not options.has_value():
+        return fallback
+    return ast.bool_argument(options.value(), name, fallback)
+
+
+def string_list_option(
+    attributes: &const[list[ast.Attribute]],
+    name: str,
+) -> list[str]:
+    result: list[str] = []
+    options = option_attribute(attributes)
+    if not options.has_value():
+        return result
+    expression = ast.find_argument(options.value(), name)
+    if not expression.has_value():
+        return result
+    for child in expression.value().children:
+        result.append(child.value)
+    return result
+
+
+def serialized_name(
+    name: str,
+    attributes: &const[list[ast.Attribute]],
+    rename_all: str,
+) -> str:
+    explicit = string_option(attributes, "rename", "")
+    if explicit != "":
+        return explicit
+    return renamed(name, rename_all)
+
+
+def path_expression(path: str) -> ast.Expression:
+    parts: list[str] = []
+    current: str = ""
+    for ch in path:
+        if ch == char(46):
+            if current != "":
+                parts.append(current)
+                current = ""
+        else:
+            current += ch
+    if current != "":
+        parts.append(current)
+    if len(parts) == 0:
+        return ast.name_expression(path)
+    result = ast.name_expression(parts[0])
+    i: usize = 1
+    while i < len(parts):
+        result = ast.member_expression(result, parts[i])
+        i += 1
+    return result

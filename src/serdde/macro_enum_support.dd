@@ -1,0 +1,230 @@
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_config import bool_option
+from serdde.macro_config import serialized_name
+from serdde.macro_config import string_list_option
+from serdde.macro_config import string_option
+from serdde.macro_config import valid_rename_rule
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import ok
+from serdde.macro_support import qname
+from serdde.macro_support import result_type
+from serdde.macro_support import value_type
+import dudu.ast as ast
+
+
+def has_name(values: &const[list[str]], name: str) -> bool:
+    for value in values:
+        if value == name:
+            return True
+    return False
+
+
+def append_statements(output: &list[ast.Statement], values: list[ast.Statement]):
+    for value in values:
+        output.append(value)
+
+
+def enum_name(item: &const[ast.EnumDecl], variant: &const[ast.EnumVariant]) -> str:
+    rename_all = string_option(item.attributes, "rename_all", "")
+    return serialized_name(variant.name, variant.attributes, rename_all)
+
+
+def enum_names(item: &const[ast.EnumDecl], variant: &const[ast.EnumVariant]) -> list[str]:
+    result: list[str] = [enum_name(item, variant)]
+    for alias in string_list_option(variant.attributes, "alias"):
+        result.append(alias)
+    return result
+
+
+def generated_names_for_variant(variant: &const[ast.EnumVariant]) -> GeneratedNames:
+    result = GeneratedNames()
+    for field in variant.fields:
+        result.reserve(field.name)
+    return result
+
+
+def variant_path(item: &const[ast.EnumDecl], name: str) -> ast.Expression:
+    return member(ast.name_expression(item.name), name)
+
+
+def variant_pattern(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+) -> ast.Expression:
+    path = variant_path(item, variant.name)
+    if len(variant.fields) == 0:
+        return path
+    values: list[ast.Expression] = []
+    for field in variant.fields:
+        values.append(ast.name_expression(field.name))
+    return ast.call_expression(path, values)
+
+
+def variant_value(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+) -> ast.Expression:
+    path = variant_path(item, variant.name)
+    if len(variant.fields) == 0:
+        return path
+    values: list[ast.Expression] = []
+    for field in variant.fields:
+        values.append(ast.named_argument_expression(field.name, ast.name_expression(field.name)))
+    return ast.call_expression(path, values)
+
+
+def field_has_default(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        field.value.has_value()
+        or bool_option(field.attributes, "default", False)
+        or string_option(field.attributes, "default_with", "") != ""
+    )
+
+
+def field_default_expression(field: &const[ast.FieldDecl]) -> ast.Expression:
+    if field.value.has_value():
+        return field.value.value()
+    default_with = string_option(field.attributes, "default_with", "")
+    if default_with != "":
+        return ast.call_expression(ast.name_expression(default_with), [])
+    return ast.template_call_expression(
+        qname("_serdde_convert", "default_value"),
+        [field.type],
+        [],
+    )
+
+
+def invalid_enum(message: str) -> ast.Expression:
+    return err(call(
+        "_serdde_error",
+        "invalid_value_error",
+        [ast.string_expression(message)],
+    ))
+
+
+def enum_result(item: &const[ast.EnumDecl]) -> ast.TypeRef:
+    return result_type(ast.named_type(item.name))
+
+
+def value_is_kind(value: ast.Expression, kind: str) -> ast.Expression:
+    return ast.binary_expression(
+        member(value, "kind"),
+        "==",
+        member(qname("_serdde_value", "ValueKind"), kind),
+    )
+
+
+def field_validation(field: &const[ast.FieldDecl], deny_unknown: bool, out: &ast.Expansion):
+    aliases = string_list_option(field.attributes, "alias")
+    default = bool_option(field.attributes, "default", False)
+    default_with = string_option(field.attributes, "default_with", "")
+    if default and default_with != "":
+        out.add_diagnostic(ast.error(
+            field.range,
+            "Serde default and default_with cannot be used together",
+        ))
+    skipped = (
+        bool_option(field.attributes, "skip", False)
+        or bool_option(field.attributes, "skip_deserializing", False)
+    )
+    if skipped and not field_has_default(field):
+        out.add_diagnostic(ast.error(
+            field.range,
+            "skipped deserialization requires a field default, default=True, or default_with",
+        ))
+    flatten = bool_option(field.attributes, "flatten", False)
+    if flatten and deny_unknown:
+        out.add_diagnostic(ast.error(
+            field.range,
+            "flatten cannot be combined with deny_unknown_fields",
+        ))
+    if flatten and (string_option(field.attributes, "rename", "") != "" or len(aliases) > 0):
+        out.add_diagnostic(ast.error(
+            field.range,
+            "flattened fields cannot use rename or alias",
+        ))
+
+
+def validate_enum(item: &const[ast.EnumDecl], out: &ast.Expansion):
+    rename_all = string_option(item.attributes, "rename_all", "")
+    if not valid_rename_rule(rename_all):
+        out.add_diagnostic(ast.error(
+            item.range,
+            "unknown Serde rename_all rule: " + rename_all,
+        ))
+    tag = string_option(item.attributes, "tag", "")
+    content = string_option(item.attributes, "content", "")
+    untagged = bool_option(item.attributes, "untagged", False)
+    if content != "" and tag == "":
+        out.add_diagnostic(ast.error(item.range, "Serde content requires tag"))
+    if untagged and (tag != "" or content != ""):
+        out.add_diagnostic(ast.error(
+            item.range,
+            "Serde untagged cannot be combined with tag or content",
+        ))
+    if tag != "" and tag == content:
+        out.add_diagnostic(ast.error(item.range, "Serde tag and content names must differ"))
+
+    names: list[str] = []
+    untagged_units: i32 = 0
+    for variant in item.variants:
+        for name in enum_names(item, variant):
+            if has_name(names, name):
+                out.add_diagnostic(ast.error(
+                    variant.range,
+                    "duplicate serialized enum variant name or alias: " + name,
+                ))
+            names.append(name)
+        if untagged and len(variant.fields) == 0:
+            untagged_units += 1
+        if bool_option(variant.attributes, "default", False):
+            out.add_diagnostic(ast.error(
+                variant.range,
+                "Serde default is only valid on fields",
+            ))
+        if string_option(variant.attributes, "default_with", "") != "":
+            out.add_diagnostic(ast.error(
+                variant.range,
+                "Serde default_with is only valid on fields",
+            ))
+        if bool_option(variant.attributes, "flatten", False):
+            out.add_diagnostic(ast.error(
+                variant.range,
+                "Serde flatten is only valid on fields",
+            ))
+        if string_option(variant.attributes, "skip_if", "") != "":
+            out.add_diagnostic(ast.error(
+                variant.range,
+                "Serde skip_if is only valid on fields",
+            ))
+
+        field_names: list[str] = []
+        deny_unknown = bool_option(item.attributes, "deny_unknown_fields", False)
+        for field in variant.fields:
+            field_validation(field, deny_unknown, out)
+            field_name = serialized_name(field.name, field.attributes, "")
+            if tag != "" and content == "" and field_name == tag:
+                out.add_diagnostic(ast.error(
+                    field.range,
+                    "internally tagged enum field collides with tag: " + tag,
+                ))
+            if has_name(field_names, field_name):
+                out.add_diagnostic(ast.error(
+                    field.range,
+                    "duplicate serialized payload field name: " + field_name,
+                ))
+            field_names.append(field_name)
+            for alias in string_list_option(field.attributes, "alias"):
+                if has_name(field_names, alias):
+                    out.add_diagnostic(ast.error(
+                        field.range,
+                        "duplicate payload field name or alias: " + alias,
+                    ))
+                field_names.append(alias)
+    if untagged_units > 1:
+        out.add_diagnostic(ast.error(
+            item.range,
+            "untagged enums may contain at most one unit variant",
+        ))

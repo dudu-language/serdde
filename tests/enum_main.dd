@@ -1,0 +1,306 @@
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.macros import Serde
+from serdde.value import empty_object_value
+from serdde.value import i64_value
+from serdde.value import null_value
+from serdde.value import string_value
+
+
+@derive(Serde)
+enum Event:
+    Quit
+    @Serde(rename="keyDown", alias=["key"])
+    KeyDown:
+        key: i32
+    Move:
+        x: i32
+        y: i32
+
+
+@derive(Serde)
+@Serde(tag="kind", deny_unknown_fields=True)
+enum InternalMessage:
+    Stop
+    Write:
+        text: str
+
+
+@derive(Serde)
+@Serde(tag="type", content="data")
+enum AdjacentMessage:
+    Ping
+    Count:
+        value: u64
+
+
+@derive(Serde)
+@Serde(untagged=True)
+enum UntaggedValue:
+    Empty
+    Name:
+        name: str
+    Count:
+        count: i32
+
+
+@derive(Serde)
+@Serde(tag="type", content="data", deny_unknown_fields=True)
+enum AdjacentAliases:
+    @Serde(rename="payload", alias=["legacy"])
+    Payload:
+        count: i32
+
+
+@derive(Serde)
+enum CollisionNames:
+    Data:
+        serdde_input: i32
+        serdde_field_name_0: i32
+        serdde_enum_payload_0: i32
+        serdde_enum_output_1: i32
+        serdde_payload_key_2: i32
+
+
+@derive(Serde)
+enum Directional:
+    @Serde(skip=True)
+    Hidden
+    @Serde(skip_serializing=True)
+    DecodeOnly
+    @Serde(skip_deserializing=True)
+    EncodeOnly
+    Visible
+
+
+def test_external() -> i32:
+    encoded = to_value(Event.Move(x=3, y=4))
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            if not value.has_field("Move"):
+                return 2
+            decoded = from_value[Event](value)
+            match decoded:
+                case Err(_):
+                    return 3
+                case Ok(event):
+                    match event:
+                        case Event.Move(x, y):
+                            return x + y - 7
+                        case _:
+                            return 4
+
+
+def test_external_alias() -> i32:
+    payload = empty_object_value()
+    payload.set_field("key", i64_value(9))
+    source = empty_object_value()
+    source.set_field("key", payload)
+    decoded = from_value[Event](source)
+    match decoded:
+        case Err(_):
+            return 1
+        case Ok(event):
+            match event:
+                case Event.KeyDown(key):
+                    return key - 9
+                case _:
+                    return 2
+
+
+def test_internal() -> i32:
+    encoded = to_value(InternalMessage.Write(text="hello"))
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            if value.field("kind").string_value != "Write":
+                return 2
+            if value.object_order[0] != "kind":
+                return 6
+            decoded = from_value[InternalMessage](value)
+            match decoded:
+                case Err(_):
+                    return 3
+                case Ok(message):
+                    match message:
+                        case InternalMessage.Write(text):
+                            if text == "hello":
+                                return 0
+                            return 4
+                        case _:
+                            return 5
+
+
+def test_adjacent() -> i32:
+    encoded = to_value(AdjacentMessage.Count(value=42))
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            if not value.has_field("type") or not value.has_field("data"):
+                return 2
+            decoded = from_value[AdjacentMessage](value)
+            match decoded:
+                case Err(_):
+                    return 3
+                case Ok(message):
+                    match message:
+                        case AdjacentMessage.Count(count):
+                            return i32(count) - 42
+                        case _:
+                            return 4
+
+
+def test_untagged() -> i32:
+    source = empty_object_value()
+    source.set_field("count", i64_value(11))
+    decoded = from_value[UntaggedValue](source)
+    match decoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            match value:
+                case UntaggedValue.Count(count):
+                    if count != 11:
+                        return 2
+                case _:
+                    return 3
+    empty = from_value[UntaggedValue](null_value())
+    match empty:
+        case Ok(value):
+            match value:
+                case UntaggedValue.Empty:
+                    return 0
+                case _:
+                    return 4
+        case _:
+            return 4
+
+
+def test_adjacent_alias_validation() -> i32:
+    missing = empty_object_value()
+    missing.set_field("type", string_value("legacy"))
+    rejected_missing = from_value[AdjacentAliases](missing)
+    match rejected_missing:
+        case Ok(_):
+            return 1
+        case Err(error):
+            if error.path_string() != "$.data":
+                return 2
+
+    payload = empty_object_value()
+    payload.set_field("count", i64_value(8))
+    unknown = empty_object_value()
+    unknown.set_field("type", string_value("payload"))
+    unknown.set_field("data", payload)
+    unknown.set_field("extra", i64_value(1))
+    rejected_unknown = from_value[AdjacentAliases](unknown)
+    match rejected_unknown:
+        case Ok(_):
+            return 3
+        case Err(error):
+            if error.path_string() != "$.extra":
+                return 4
+
+    source = empty_object_value()
+    source.set_field("type", string_value("legacy"))
+    source.set_field("data", payload)
+    decoded = from_value[AdjacentAliases](source)
+    match decoded:
+        case Err(_):
+            return 5
+        case Ok(value):
+            match value:
+                case AdjacentAliases.Payload(count):
+                    return count - 8
+
+
+def test_generated_name_hygiene() -> i32:
+    source = CollisionNames.Data(
+        serdde_input=1,
+        serdde_field_name_0=2,
+        serdde_enum_payload_0=3,
+        serdde_enum_output_1=4,
+        serdde_payload_key_2=5,
+    )
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[CollisionNames](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(output):
+                    match output:
+                        case CollisionNames.Data(a, b, c, d, e):
+                            return a + b + c + d + e - 15
+
+
+def test_directional_skips() -> i32:
+    hidden = to_value(Directional.Hidden)
+    match hidden:
+        case Ok(_):
+            return 1
+        case Err(_):
+            pass
+    decode_only = to_value(Directional.DecodeOnly)
+    match decode_only:
+        case Ok(_):
+            return 2
+        case Err(_):
+            pass
+    encoded = to_value(Directional.EncodeOnly)
+    match encoded:
+        case Err(_):
+            return 3
+        case Ok(_):
+            pass
+    rejected = from_value[Directional](string_value("EncodeOnly"))
+    match rejected:
+        case Ok(_):
+            return 4
+        case Err(_):
+            pass
+    accepted = from_value[Directional](string_value("DecodeOnly"))
+    match accepted:
+        case Err(_):
+            return 5
+        case Ok(value):
+            match value:
+                case Directional.DecodeOnly:
+                    return 0
+                case _:
+                    return 6
+
+
+def main() -> i32:
+    status = test_external()
+    if status != 0:
+        return 10 + status
+    status = test_external_alias()
+    if status != 0:
+        return 20 + status
+    status = test_internal()
+    if status != 0:
+        return 30 + status
+    status = test_adjacent()
+    if status != 0:
+        return 40 + status
+    status = test_untagged()
+    if status != 0:
+        return 50 + status
+    status = test_adjacent_alias_validation()
+    if status != 0:
+        return 60 + status
+    status = test_generated_name_hygiene()
+    if status != 0:
+        return 70 + status
+    status = test_directional_skips()
+    if status != 0:
+        return 80 + status
+    return 0

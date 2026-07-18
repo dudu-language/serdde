@@ -48,11 +48,15 @@ def self_reference() -> ast.Parameter:
     )
 
 
-def value_reference() -> ast.Parameter:
+def value_reference_named(name: str) -> ast.Parameter:
     return ast.Parameter(
-        name="value",
+        name=name,
         type=ast.reference_type(ast.const_type(value_type())),
     )
+
+
+def value_reference() -> ast.Parameter:
+    return value_reference_named("value")
 
 
 def is_named(type: &const[ast.TypeRef], name: str) -> bool:

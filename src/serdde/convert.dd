@@ -17,6 +17,10 @@ def dict_keys[T](values: &const[dict[str, T]]) -> list[str]:
     return result
 
 
+def default_value[T]() -> T:
+    return T()
+
+
 def encode_bool(value: bool) -> Value:
     return bool_value(value)
 

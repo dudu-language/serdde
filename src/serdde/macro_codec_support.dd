@@ -10,10 +10,26 @@ import dudu.ast as ast
 
 class GeneratedNames:
     next_id: usize = 0
+    reserved: list[str] = []
+
+    def reserve(self, name: str):
+        for existing in self.reserved:
+            if existing == name:
+                return
+        self.reserved.append(name)
 
     def take(self, prefix: str) -> str:
-        result = "serdde_" + prefix + "_" + str(self.next_id)
-        self.next_id += 1
+        result: str = ""
+        available = False
+        while not available:
+            result = "serdde_" + prefix + "_" + str(self.next_id)
+            self.next_id += 1
+            available = True
+            for existing in self.reserved:
+                if existing == result:
+                    available = False
+            if available:
+                self.reserved.append(result)
         return result
 
 

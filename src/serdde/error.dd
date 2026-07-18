@@ -87,6 +87,13 @@ def unknown_field_error(name: str) -> SerddeError:
     ).at_field(name)
 
 
+def duplicate_field_error(name: str) -> SerddeError:
+    return SerddeError(
+        kind=ErrorKind.DuplicateField,
+        message="field was provided more than once",
+    ).at_field(name)
+
+
 def invalid_value_error(message: str) -> SerddeError:
     return SerddeError(kind=ErrorKind.InvalidValue, message=message)
 

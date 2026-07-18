@@ -14,3 +14,11 @@ kind = "executable"
 [targets.derive]
 entry = "src/derive_main.dd"
 kind = "executable"
+
+[targets.config]
+entry = "tests/config_main.dd"
+kind = "executable"
+
+[targets.enums]
+entry = "tests/enum_main.dd"
+kind = "executable"

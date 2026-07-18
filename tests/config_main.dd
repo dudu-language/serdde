@@ -1,0 +1,157 @@
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.macros import Serde
+from serdde.value import Value
+from serdde.value import empty_object_value
+from serdde.value import i64_value
+from serdde.value import string_value
+
+
+def default_label() -> str:
+    return "generated"
+
+
+def is_zero(value: i32) -> bool:
+    return value == 0
+
+
+@derive(Serde)
+@Serde(rename_all="camelCase", deny_unknown_fields=True)
+class Configured:
+    player_id: u64
+
+    @Serde(rename="displayName", alias=["name", "display_name"])
+    display_name: str
+
+    @Serde(default=True)
+    score: i32
+
+    @Serde(default_with="default_label")
+    label: str
+
+    @Serde(skip=True, default=True)
+    secret: str
+
+    @Serde(skip_deserializing=True, default=True)
+    transient: i32
+
+    @Serde(skip_if="is_zero")
+    hidden_when_zero: i32
+
+
+@derive(Serde)
+class Address:
+    city: str
+
+
+@derive(Serde)
+class Flattened:
+    id: i32
+
+    @Serde(flatten=True)
+    address: Address
+
+
+def configured_input() -> Value:
+    value = empty_object_value()
+    value.set_field("playerId", i64_value(9))
+    value.set_field("name", string_value("Ada"))
+    value.set_field("hiddenWhenZero", i64_value(0))
+    return value
+
+
+def test_decode_aliases_and_defaults() -> i32:
+    decoded = from_value[Configured](configured_input())
+    match decoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            if value.player_id != 9 or value.display_name != "Ada":
+                return 2
+            if value.score != 0 or value.label != "generated":
+                return 3
+            if value.secret != "" or value.transient != 0:
+                return 4
+    return 0
+
+
+def test_encode_directional_options() -> i32:
+    source = Configured(
+        player_id=4,
+        display_name="Lin",
+        score=7,
+        label="kept",
+        secret="hidden",
+        transient=12,
+        hidden_when_zero=0,
+    )
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            if not value.has_field("playerId") or not value.has_field("displayName"):
+                return 2
+            if value.has_field("secret") or value.has_field("hiddenWhenZero"):
+                return 3
+            if not value.has_field("transient"):
+                return 4
+    return 0
+
+
+def test_flatten_round_trip() -> i32:
+    source = Flattened(id=3, address=Address(city="Paris"))
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            if value.has_field("address") or not value.has_field("city"):
+                return 2
+            decoded = from_value[Flattened](value)
+            match decoded:
+                case Err(_):
+                    return 3
+                case Ok(output):
+                    if output.id != 3 or output.address.city != "Paris":
+                        return 4
+    return 0
+
+
+def test_unknown_and_duplicate_fields() -> i32:
+    unknown = configured_input()
+    unknown.set_field("extra", i64_value(1))
+    rejected_unknown = from_value[Configured](unknown)
+    match rejected_unknown:
+        case Ok(_):
+            return 1
+        case Err(error):
+            if error.path_string() != "$.extra":
+                return 2
+
+    duplicate = configured_input()
+    duplicate.set_field("displayName", string_value("Grace"))
+    rejected_duplicate = from_value[Configured](duplicate)
+    match rejected_duplicate:
+        case Ok(_):
+            return 3
+        case Err(error):
+            if error.path_string() != "$.name":
+                return 4
+    return 0
+
+
+def main() -> i32:
+    status = test_decode_aliases_and_defaults()
+    if status != 0:
+        return 10 + status
+    status = test_encode_directional_options()
+    if status != 0:
+        return 20 + status
+    status = test_flatten_round_trip()
+    if status != 0:
+        return 30 + status
+    status = test_unknown_and_duplicate_fields()
+    if status != 0:
+        return 40 + status
+    return 0

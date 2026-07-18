@@ -1,9 +1,19 @@
-from serdde.macro_support import call
 from serdde.macro_codec import decode_statements
 from serdde.macro_codec import encode_statements
 from serdde.macro_codec_support import ErrorContext
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_codec_support import contexts_with
+from serdde.macro_codec_support import typed_for
+from serdde.macro_config import bool_option
+from serdde.macro_config import path_expression
+from serdde.macro_config import serialized_name
+from serdde.macro_config import string_list_option
+from serdde.macro_config import string_option
+from serdde.macro_config import valid_rename_rule
+from serdde.macro_enum_decode import enum_decode_methods
+from serdde.macro_enum_encode import enum_encode_method
+from serdde.macro_enum_support import validate_enum
+from serdde.macro_support import call
 from serdde.macro_support import err
 from serdde.macro_support import error_type
 from serdde.macro_support import member
@@ -24,7 +34,8 @@ class SerdeOptions:
     rename: str = ""
     rename_all: str = ""
     alias: list[str] = []
-    default: str = ""
+    default: bool = False
+    default_with: str = ""
     skip: bool = False
     skip_serializing: bool = False
     skip_deserializing: bool = False
@@ -36,15 +47,6 @@ class SerdeOptions:
     untagged: bool = False
 
 
-def serialized_name(field: &const[ast.FieldDecl]) -> str:
-    options = ast.find_attribute(field.attributes, "Serde")
-    if options.has_value():
-        name = ast.string_argument(options.value(), "rename", "")
-        if name != "":
-            return name
-    return field.name
-
-
 def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     body: list[ast.Statement] = []
     names = GeneratedNames()
@@ -53,14 +55,13 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
         value_type(),
         call("_serdde_value", "empty_object_value", []),
     ))
+    rename_all = string_option(item.attributes, "rename_all", "")
     for field in item.fields:
-        options = ast.find_attribute(field.attributes, "Serde")
-        if options.has_value():
-            if ast.bool_argument(options.value(), "skip", False):
-                continue
-            if ast.bool_argument(options.value(), "skip_serializing", False):
-                continue
-        field_name = serialized_name(field)
+        if bool_option(field.attributes, "skip", False):
+            continue
+        if bool_option(field.attributes, "skip_serializing", False):
+            continue
+        field_name = serialized_name(field.name, field.attributes, rename_all)
         source = member(ast.name_expression("self"), field.name)
         value_name = "encoded_" + field.name + "_ready"
         contexts: list[ErrorContext] = []
@@ -69,6 +70,7 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             "at_field",
             ast.string_expression(field_name),
         )
+        field_body: list[ast.Statement] = []
         for statement in encode_statements(
             field.type,
             source,
@@ -76,12 +78,54 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             contexts,
             names,
         ):
-            body.append(statement)
-        body.append(ast.expression_statement(method(
-            ast.name_expression("output"),
-            "set_field",
-            [ast.string_expression(field_name), ast.name_expression(value_name)],
-        )))
+            field_body.append(statement)
+        if bool_option(field.attributes, "flatten", False):
+            flattened = ast.name_expression(value_name)
+            not_object = ast.binary_expression(
+                member(flattened, "kind"),
+                "!=",
+                member(qname("_serdde_value", "ValueKind"), "Object"),
+            )
+            field_body.append(ast.if_statement(not_object, [ast.return_statement(err(call(
+                "_serdde_error",
+                "type_error",
+                [ast.string_expression("flattened field must serialize as an object")],
+            )))]))
+            key_name = names.take("flatten_key")
+            key = ast.name_expression(key_name)
+            duplicate = method(ast.name_expression("output"), "has_field", [key])
+            flatten_body: list[ast.Statement] = [ast.if_statement(
+                duplicate,
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "duplicate_field_error",
+                    [key],
+                )))],
+            )]
+            flatten_body.append(ast.expression_statement(method(
+                ast.name_expression("output"),
+                "set_field",
+                [key, method(flattened, "field", [key])],
+            )))
+            field_body.append(typed_for(
+                key_name,
+                ast.named_type("str"),
+                member(flattened, "object_order"),
+                flatten_body,
+            ))
+        else:
+            field_body.append(ast.expression_statement(method(
+                ast.name_expression("output"),
+                "set_field",
+                [ast.string_expression(field_name), ast.name_expression(value_name)],
+            )))
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if == "":
+            for statement in field_body:
+                body.append(statement)
+        else:
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
     body.append(ast.return_statement(ok(ast.name_expression("output"))))
     return ast.FunctionDecl(
         name="serdde_serialize",
@@ -91,59 +135,141 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     )
 
 
+def field_has_default(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        field.value.has_value()
+        or bool_option(field.attributes, "default", False)
+        or string_option(field.attributes, "default_with", "") != ""
+    )
+
+
+def field_default_expression(field: &const[ast.FieldDecl]) -> ast.Expression:
+    if field.value.has_value():
+        return field.value.value()
+    default_with = string_option(field.attributes, "default_with", "")
+    if default_with != "":
+        return ast.call_expression(path_expression(default_with), [])
+    return ast.template_call_expression(
+        qname("_serdde_convert", "default_value"),
+        [field.type],
+        [],
+    )
+
+
+def and_expression(values: list[ast.Expression]) -> ast.Expression:
+    if len(values) == 0:
+        return ast.bool_expression(True)
+    result = values[0]
+    i: usize = 1
+    while i < len(values):
+        result = ast.binary_expression(result, "and", values[i])
+        i += 1
+    return result
+
+
 def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     body: list[ast.Statement] = []
     names = GeneratedNames()
+    value = ast.name_expression("value")
     is_object = ast.binary_expression(
-        member(ast.name_expression("value"), "kind"),
+        member(value, "kind"),
         "!=",
         member(qname("_serdde_value", "ValueKind"), "Object"),
     )
-    body.append(ast.if_statement(is_object, [
-        ast.return_statement(err(call(
-            "_serdde_error",
-            "type_error",
-            [ast.string_expression("expected object")],
-        ))),
-    ]))
+    body.append(ast.if_statement(is_object, [ast.return_statement(err(call(
+        "_serdde_error",
+        "type_error",
+        [ast.string_expression("expected object")],
+    )))]))
+    rename_all = string_option(item.attributes, "rename_all", "")
+    accepted_names: list[str] = []
     constructor_arguments: list[ast.Expression] = []
     for field in item.fields:
-        options = ast.find_attribute(field.attributes, "Serde")
-        skip = False
-        if options.has_value():
-            skip = ast.bool_argument(options.value(), "skip", False)
-            if ast.bool_argument(options.value(), "skip_deserializing", False):
-                skip = True
-        field_name = serialized_name(field)
-        if skip:
-            if field.value.has_value():
-                constructor_arguments.append(ast.named_argument_expression(field.name, field.value.value()))
-                continue
-            body.append(ast.return_statement(err(call(
-                "_serdde_error",
-                "missing_field_error",
-                [ast.string_expression(field_name)],
-            ))))
-            continue
-        has_field = method(
-            ast.name_expression("value"),
-            "has_field",
-            [ast.string_expression(field_name)],
+        field_name = serialized_name(field.name, field.attributes, rename_all)
+        aliases = string_list_option(field.attributes, "alias")
+        accepted_names.append(field_name)
+        for alias in aliases:
+            accepted_names.append(alias)
+        skipped = (
+            bool_option(field.attributes, "skip", False)
+            or bool_option(field.attributes, "skip_deserializing", False)
         )
-        if field.value.has_value():
-            body.append(ast.variable_statement(field.name, field.type, field.value.value()))
-            field_lookup = method(
-                ast.name_expression("value"),
-                "field",
-                [ast.string_expression(field_name)],
-            )
+        if skipped:
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                field_default_expression(field),
+            ))
+            continue
+        if bool_option(field.attributes, "flatten", False):
             ready_name = "decoded_" + field.name + "_ready"
             contexts: list[ErrorContext] = []
             contexts = contexts_with(
                 contexts,
                 "at_field",
-                ast.string_expression(field_name),
+                ast.string_expression(field.name),
             )
+            for statement in decode_statements(
+                field.type,
+                value,
+                ready_name,
+                contexts,
+                names,
+            ):
+                body.append(statement)
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                ast.name_expression(ready_name),
+            ))
+            continue
+        selected_name = names.take("field_name")
+        present_name = names.take("field_present")
+        body.append(ast.variable_statement(
+            selected_name,
+            ast.named_type("str"),
+            ast.string_expression(field_name),
+        ))
+        body.append(ast.variable_statement(
+            present_name,
+            ast.named_type("bool"),
+            ast.bool_expression(False),
+        ))
+        candidates: list[str] = [field_name]
+        for alias in aliases:
+            candidates.append(alias)
+        for candidate in candidates:
+            candidate_present = method(value, "has_field", [ast.string_expression(candidate)])
+            duplicate = ast.if_statement(
+                ast.name_expression(present_name),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "duplicate_field_error",
+                    [ast.string_expression(candidate)],
+                )))],
+            )
+            select_body: list[ast.Statement] = [duplicate]
+            select_body.append(ast.assignment_statement(
+                ast.name_expression(selected_name),
+                ast.string_expression(candidate),
+            ))
+            select_body.append(ast.assignment_statement(
+                ast.name_expression(present_name),
+                ast.bool_expression(True),
+            ))
+            body.append(ast.if_statement(candidate_present, select_body))
+        field_lookup = method(value, "field", [ast.name_expression(selected_name)])
+        ready_name = "decoded_" + field.name + "_ready"
+        contexts: list[ErrorContext] = []
+        contexts = contexts_with(
+            contexts,
+            "at_field",
+            ast.name_expression(selected_name),
+        )
+        if field_has_default(field):
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                field_default_expression(field),
+            ))
             decode_body = decode_statements(
                 field.type,
                 field_lookup,
@@ -155,32 +281,20 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
                 ast.name_expression(field.name),
                 ast.name_expression(ready_name),
             ))
-            body.append(ast.if_statement(has_field, decode_body))
+            body.append(ast.if_statement(ast.name_expression(present_name), decode_body))
         else:
             body.append(ast.if_statement(
-                ast.unary_expression("not", has_field),
+                ast.unary_expression("not", ast.name_expression(present_name)),
                 [ast.return_statement(err(call(
                     "_serdde_error",
                     "missing_field_error",
                     [ast.string_expression(field_name)],
                 )))],
             ))
-            field_lookup = method(
-                ast.name_expression("value"),
-                "field",
-                [ast.string_expression(field_name)],
-            )
-            ready_name = field.name
-            contexts: list[ErrorContext] = []
-            contexts = contexts_with(
-                contexts,
-                "at_field",
-                ast.string_expression(field_name),
-            )
             for statement in decode_statements(
                 field.type,
                 field_lookup,
-                ready_name,
+                field.name,
                 contexts,
                 names,
             ):
@@ -188,6 +302,27 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
         constructor_arguments.append(ast.named_argument_expression(
             field.name,
             ast.name_expression(field.name),
+        ))
+    if bool_option(item.attributes, "deny_unknown_fields", False):
+        key_name = names.take("input_key")
+        key = ast.name_expression(key_name)
+        comparisons: list[ast.Expression] = []
+        for accepted in accepted_names:
+            comparisons.append(ast.binary_expression(
+                key,
+                "!=",
+                ast.string_expression(accepted),
+            ))
+        unknown = and_expression(comparisons)
+        body.append(typed_for(
+            key_name,
+            ast.named_type("str"),
+            member(value, "object_order"),
+            [ast.if_statement(unknown, [ast.return_statement(err(call(
+                "_serdde_error",
+                "unknown_field_error",
+                [key],
+            )))])],
         ))
     constructed = ast.call_expression(ast.name_expression("Self"), constructor_arguments)
     body.append(ast.return_statement(ok(constructed)))
@@ -200,6 +335,67 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     )
 
 
+def has_name(values: &const[list[str]], name: str) -> bool:
+    for value in values:
+        if value == name:
+            return True
+    return False
+
+
+def validate_class(item: &const[ast.ClassDecl], out: &ast.Expansion):
+    rename_all = string_option(item.attributes, "rename_all", "")
+    if not valid_rename_rule(rename_all):
+        out.add_diagnostic(ast.error(
+            item.range,
+            "unknown Serde rename_all rule: " + rename_all,
+        ))
+    if string_option(item.attributes, "tag", "") != "":
+        out.add_diagnostic(ast.error(item.range, "Serde tag is only valid on enums"))
+    if string_option(item.attributes, "content", "") != "":
+        out.add_diagnostic(ast.error(item.range, "Serde content is only valid on enums"))
+    if bool_option(item.attributes, "untagged", False):
+        out.add_diagnostic(ast.error(item.range, "Serde untagged is only valid on enums"))
+    deny_unknown = bool_option(item.attributes, "deny_unknown_fields", False)
+    names: list[str] = []
+    for field in item.fields:
+        name = serialized_name(field.name, field.attributes, rename_all)
+        if has_name(names, name):
+            out.add_diagnostic(ast.error(field.range, "duplicate serialized field name: " + name))
+        names.append(name)
+        aliases = string_list_option(field.attributes, "alias")
+        for alias in aliases:
+            if has_name(names, alias):
+                out.add_diagnostic(ast.error(field.range, "duplicate field name or alias: " + alias))
+            names.append(alias)
+        default = bool_option(field.attributes, "default", False)
+        default_with = string_option(field.attributes, "default_with", "")
+        if default and default_with != "":
+            out.add_diagnostic(ast.error(
+                field.range,
+                "Serde default and default_with cannot be used together",
+            ))
+        skipped = (
+            bool_option(field.attributes, "skip", False)
+            or bool_option(field.attributes, "skip_deserializing", False)
+        )
+        if skipped and not field_has_default(field):
+            out.add_diagnostic(ast.error(
+                field.range,
+                "skipped deserialization requires a field default, default=True, or default_with",
+            ))
+        flatten = bool_option(field.attributes, "flatten", False)
+        if flatten and deny_unknown:
+            out.add_diagnostic(ast.error(
+                field.range,
+                "flatten cannot be combined with deny_unknown_fields",
+            ))
+        if flatten and (string_option(field.attributes, "rename", "") != "" or len(aliases) > 0):
+            out.add_diagnostic(ast.error(
+                field.range,
+                "flattened fields cannot use rename or alias",
+            ))
+
+
 def runtime_imports(out: &ast.Expansion):
     out.require_module("serdde.convert", "_serdde_convert")
     out.require_module("serdde.error", "_serdde_error")
@@ -207,25 +403,55 @@ def runtime_imports(out: &ast.Expansion):
 
 
 @macro(attributes=SerdeOptions)
-def Serialize(item: ast.ClassDecl) -> ast.Expansion:
+def Serialize(item: ast.Declaration) -> ast.Expansion:
     out = ast.expansion()
     runtime_imports(out)
-    out.add_method(encode_method(item))
+    if item.kind == ast.DeclarationKind.Class and item.class_decl.has_value():
+        class_target = item.class_decl.value()
+        validate_class(class_target, out)
+        out.add_method(encode_method(class_target))
+    elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
+        enum_target = item.enum_decl.value()
+        validate_enum(enum_target, out)
+        out.add_method(enum_encode_method(enum_target))
+    else:
+        out.add_diagnostic(ast.error(ast.SourceRange(), "Serialize requires a class or enum"))
     return out
 
 
 @macro(attributes=SerdeOptions)
-def Deserialize(item: ast.ClassDecl) -> ast.Expansion:
+def Deserialize(item: ast.Declaration) -> ast.Expansion:
     out = ast.expansion()
     runtime_imports(out)
-    out.add_method(decode_method(item))
+    if item.kind == ast.DeclarationKind.Class and item.class_decl.has_value():
+        class_target = item.class_decl.value()
+        validate_class(class_target, out)
+        out.add_method(decode_method(class_target))
+    elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
+        enum_target = item.enum_decl.value()
+        validate_enum(enum_target, out)
+        for generated in enum_decode_methods(enum_target):
+            out.add_method(generated)
+    else:
+        out.add_diagnostic(ast.error(ast.SourceRange(), "Deserialize requires a class or enum"))
     return out
 
 
 @macro(attributes=SerdeOptions)
-def Serde(item: ast.ClassDecl) -> ast.Expansion:
+def Serde(item: ast.Declaration) -> ast.Expansion:
     out = ast.expansion()
     runtime_imports(out)
-    out.add_method(encode_method(item))
-    out.add_method(decode_method(item))
+    if item.kind == ast.DeclarationKind.Class and item.class_decl.has_value():
+        class_target = item.class_decl.value()
+        validate_class(class_target, out)
+        out.add_method(encode_method(class_target))
+        out.add_method(decode_method(class_target))
+    elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
+        enum_target = item.enum_decl.value()
+        validate_enum(enum_target, out)
+        out.add_method(enum_encode_method(enum_target))
+        for generated in enum_decode_methods(enum_target):
+            out.add_method(generated)
+    else:
+        out.add_diagnostic(ast.error(ast.SourceRange(), "Serde requires a class or enum"))
     return out

@@ -15,3 +15,10 @@ All notable changes to Serdde are recorded here. The format follows
 - Public typed derives for classes with nested derived fields, lists, sets,
   string-keyed dictionaries, `Option`, `Result`, and arbitrary-rank fixed
   arrays. Generated failures retain field and index paths.
+- Class derives now support `rename`, `rename_all`, aliases, defaults and named
+  default functions, directional skips, skip predicates, flattening, duplicate
+  input detection, and optional rejection of unknown fields.
+- Enum derives now support unit and named-payload variants with external,
+  internal, adjacent, and untagged representations. Variant aliases,
+  directional skips, unknown-field policy, deterministic tag order, and
+  collision-safe generated bindings are covered by executable fixtures.

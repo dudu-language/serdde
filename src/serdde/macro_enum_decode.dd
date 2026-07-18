@@ -1,0 +1,427 @@
+from serdde.macro_codec import decode_statements
+from serdde.macro_codec_support import ErrorContext
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_codec_support import contexts_with
+from serdde.macro_codec_support import typed_for
+from serdde.macro_config import bool_option
+from serdde.macro_config import serialized_name
+from serdde.macro_config import snake_name
+from serdde.macro_config import string_list_option
+from serdde.macro_config import string_option
+from serdde.macro_enum_support import append_statements
+from serdde.macro_enum_support import enum_name
+from serdde.macro_enum_support import enum_names
+from serdde.macro_enum_support import enum_result
+from serdde.macro_enum_support import field_default_expression
+from serdde.macro_enum_support import field_has_default
+from serdde.macro_enum_support import generated_names_for_variant
+from serdde.macro_enum_support import invalid_enum
+from serdde.macro_enum_support import value_is_kind
+from serdde.macro_enum_support import variant_value
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import ok
+from serdde.macro_support import value_reference
+from serdde.macro_support import value_reference_named
+from serdde.macro_support import value_type
+import dudu.ast as ast
+
+
+def helper_name(variant: &const[ast.EnumVariant]) -> str:
+    return "serdde_decode_" + snake_name(variant.name)
+
+
+def input_name(variant: &const[ast.EnumVariant]) -> str:
+    result = "serdde_input"
+    searching = True
+    while searching:
+        searching = False
+        for field in variant.fields:
+            if field.name == result:
+                result += "_"
+                searching = True
+    return result
+
+
+def and_expression(values: list[ast.Expression]) -> ast.Expression:
+    if len(values) == 0:
+        return ast.bool_expression(True)
+    result = values[0]
+    i: usize = 1
+    while i < len(values):
+        result = ast.binary_expression(result, "and", values[i])
+        i += 1
+    return result
+
+
+def decode_payload_method(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    internal_tag: str,
+) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    parameter_name = input_name(variant)
+    value = ast.name_expression(parameter_name)
+    if len(variant.fields) == 0:
+        if bool_option(item.attributes, "untagged", False):
+            body.append(ast.if_statement(
+                ast.unary_expression("not", value_is_kind(value, "Null")),
+                [ast.return_statement(invalid_enum("expected null unit variant"))],
+            ))
+        body.append(ast.return_statement(ok(variant_value(item, variant))))
+        return ast.FunctionDecl(
+            name=helper_name(variant),
+            parameters=[value_reference_named(parameter_name)],
+            return_type=enum_result(item),
+            body=body,
+            is_static=True,
+        )
+
+    body.append(ast.if_statement(
+        ast.unary_expression("not", value_is_kind(value, "Object")),
+        [ast.return_statement(invalid_enum("expected enum payload object"))],
+    ))
+    names = generated_names_for_variant(variant)
+    accepted_names: list[str] = []
+    constructor_arguments: list[ast.Expression] = []
+    for field in variant.fields:
+        field_name = serialized_name(field.name, field.attributes, "")
+        aliases = string_list_option(field.attributes, "alias")
+        accepted_names.append(field_name)
+        for alias in aliases:
+            accepted_names.append(alias)
+        skipped = (
+            bool_option(field.attributes, "skip", False)
+            or bool_option(field.attributes, "skip_deserializing", False)
+        )
+        if skipped:
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                field_default_expression(field),
+            ))
+            continue
+        if bool_option(field.attributes, "flatten", False):
+            ready_name = names.take("decoded_" + field.name)
+            contexts: list[ErrorContext] = []
+            contexts = contexts_with(contexts, "at_field", ast.string_expression(field.name))
+            append_statements(body, decode_statements(
+                field.type,
+                value,
+                ready_name,
+                contexts,
+                names,
+            ))
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                ast.name_expression(ready_name),
+            ))
+            continue
+        selected_name = names.take("field_name")
+        present_name = names.take("field_present")
+        body.append(ast.variable_statement(
+            selected_name,
+            ast.named_type("str"),
+            ast.string_expression(field_name),
+        ))
+        body.append(ast.variable_statement(
+            present_name,
+            ast.named_type("bool"),
+            ast.bool_expression(False),
+        ))
+        candidates: list[str] = [field_name]
+        for alias in aliases:
+            candidates.append(alias)
+        for candidate in candidates:
+            duplicate = ast.if_statement(
+                ast.name_expression(present_name),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "duplicate_field_error",
+                    [ast.string_expression(candidate)],
+                )))],
+            )
+            select_body: list[ast.Statement] = [duplicate]
+            select_body.append(ast.assignment_statement(
+                ast.name_expression(selected_name),
+                ast.string_expression(candidate),
+            ))
+            select_body.append(ast.assignment_statement(
+                ast.name_expression(present_name),
+                ast.bool_expression(True),
+            ))
+            body.append(ast.if_statement(
+                method(value, "has_field", [ast.string_expression(candidate)]),
+                select_body,
+            ))
+        field_lookup = method(value, "field", [ast.name_expression(selected_name)])
+        ready_name = names.take("decoded_" + field.name)
+        contexts: list[ErrorContext] = []
+        contexts = contexts_with(contexts, "at_field", ast.name_expression(selected_name))
+        if field_has_default(field):
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                field_default_expression(field),
+            ))
+            decode_body = decode_statements(
+                field.type,
+                field_lookup,
+                ready_name,
+                contexts,
+                names,
+            )
+            decode_body.append(ast.assignment_statement(
+                ast.name_expression(field.name),
+                ast.name_expression(ready_name),
+            ))
+            body.append(ast.if_statement(ast.name_expression(present_name), decode_body))
+        else:
+            body.append(ast.if_statement(
+                ast.unary_expression("not", ast.name_expression(present_name)),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "missing_field_error",
+                    [ast.string_expression(field_name)],
+                )))],
+            ))
+            append_statements(body, decode_statements(
+                field.type,
+                field_lookup,
+                field.name,
+                contexts,
+                names,
+            ))
+        constructor_arguments.append(ast.named_argument_expression(
+            field.name,
+            ast.name_expression(field.name),
+        ))
+    if bool_option(item.attributes, "deny_unknown_fields", False):
+        key_name = names.take("input_key")
+        key = ast.name_expression(key_name)
+        comparisons: list[ast.Expression] = []
+        for accepted in accepted_names:
+            comparisons.append(ast.binary_expression(
+                key,
+                "!=",
+                ast.string_expression(accepted),
+            ))
+        if internal_tag != "":
+            comparisons.append(ast.binary_expression(
+                key,
+                "!=",
+                ast.string_expression(internal_tag),
+            ))
+        body.append(typed_for(
+            key_name,
+            ast.named_type("str"),
+            member(value, "object_order"),
+            [ast.if_statement(and_expression(comparisons), [ast.return_statement(err(call(
+                "_serdde_error",
+                "unknown_field_error",
+                [key],
+            )))])],
+        ))
+    body.append(ast.return_statement(ok(ast.call_expression(
+        member(ast.name_expression(item.name), variant.name),
+        constructor_arguments,
+    ))))
+    return ast.FunctionDecl(
+        name=helper_name(variant),
+        parameters=[value_reference_named(parameter_name)],
+        return_type=enum_result(item),
+        body=body,
+        is_static=True,
+        visibility=ast.Visibility.Private,
+    )
+
+
+def helper_call(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    value: ast.Expression,
+) -> ast.Expression:
+    return ast.call_expression(
+        member(ast.name_expression(item.name), helper_name(variant)),
+        [value],
+    )
+
+
+def active_for_decode(variant: &const[ast.EnumVariant]) -> bool:
+    return not (
+        bool_option(variant.attributes, "skip", False)
+        or bool_option(variant.attributes, "skip_deserializing", False)
+    )
+
+
+def return_for_variant_names(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    selected: ast.Expression,
+    payload: ast.Expression,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    for name in enum_names(item, variant):
+        body.append(ast.if_statement(
+            ast.binary_expression(selected, "==", ast.string_expression(name)),
+            [ast.return_statement(helper_call(item, variant, payload))],
+        ))
+    return body
+
+
+def external_decode_body(item: &const[ast.EnumDecl]) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    value = ast.name_expression("value")
+    string_body: list[ast.Statement] = []
+    for variant in item.variants:
+        if active_for_decode(variant) and len(variant.fields) == 0:
+            append_statements(
+                string_body,
+                return_for_variant_names(
+                    item,
+                    variant,
+                    member(value, "string_value"),
+                    value,
+                ),
+            )
+    body.append(ast.if_statement(value_is_kind(value, "String"), string_body))
+
+    object_body: list[ast.Statement] = []
+    exact_one = ast.binary_expression(
+        ast.call_expression(ast.name_expression("len"), [member(value, "object_order")]),
+        "!=",
+        ast.int_expression("1"),
+    )
+    object_body.append(ast.if_statement(
+        exact_one,
+        [ast.return_statement(invalid_enum("externally tagged enum requires one variant key"))],
+    ))
+    for variant in item.variants:
+        if not active_for_decode(variant) or len(variant.fields) == 0:
+            continue
+        for name in enum_names(item, variant):
+            object_body.append(ast.if_statement(
+                method(value, "has_field", [ast.string_expression(name)]),
+                [ast.return_statement(helper_call(
+                    item,
+                    variant,
+                    method(value, "field", [ast.string_expression(name)]),
+                ))],
+            ))
+    body.append(ast.if_statement(value_is_kind(value, "Object"), object_body))
+    body.append(ast.return_statement(invalid_enum("unknown externally tagged enum variant")))
+    return body
+
+
+def tagged_decode_body(item: &const[ast.EnumDecl], tag: str, content: str) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    value = ast.name_expression("value")
+    body.append(ast.if_statement(
+        ast.unary_expression("not", value_is_kind(value, "Object")),
+        [ast.return_statement(invalid_enum("expected tagged enum object"))],
+    ))
+    body.append(ast.if_statement(
+        ast.unary_expression("not", method(value, "has_field", [ast.string_expression(tag)])),
+        [ast.return_statement(err(call(
+            "_serdde_error",
+            "missing_field_error",
+            [ast.string_expression(tag)],
+        )))],
+    ))
+    tag_value = method(value, "field", [ast.string_expression(tag)])
+    body.append(ast.if_statement(
+        ast.unary_expression("not", value_is_kind(tag_value, "String")),
+        [ast.return_statement(invalid_enum("enum tag must be a string"))],
+    ))
+    selected = member(tag_value, "string_value")
+    if content != "" and bool_option(item.attributes, "deny_unknown_fields", False):
+        key = ast.name_expression("serdde_outer_key")
+        unknown = and_expression([
+            ast.binary_expression(key, "!=", ast.string_expression(tag)),
+            ast.binary_expression(key, "!=", ast.string_expression(content)),
+        ])
+        body.append(typed_for(
+            "serdde_outer_key",
+            ast.named_type("str"),
+            member(value, "object_order"),
+            [ast.if_statement(unknown, [ast.return_statement(err(call(
+                "_serdde_error",
+                "unknown_field_error",
+                [key],
+            )))])],
+        ))
+    for variant in item.variants:
+        if not active_for_decode(variant):
+            continue
+        payload = value
+        if content != "" and len(variant.fields) > 0:
+            missing = ast.unary_expression(
+                "not",
+                method(value, "has_field", [ast.string_expression(content)]),
+            )
+            for accepted_name in enum_names(item, variant):
+                body.append(ast.if_statement(
+                    and_expression([
+                        ast.binary_expression(
+                            selected,
+                            "==",
+                            ast.string_expression(accepted_name),
+                        ),
+                        missing,
+                    ]),
+                    [ast.return_statement(err(call(
+                        "_serdde_error",
+                        "missing_field_error",
+                        [ast.string_expression(content)],
+                    )))],
+                ))
+            payload = method(value, "field", [ast.string_expression(content)])
+        append_statements(body, return_for_variant_names(item, variant, selected, payload))
+    body.append(ast.return_statement(invalid_enum("unknown tagged enum variant")))
+    return body
+
+
+def untagged_decode_body(item: &const[ast.EnumDecl]) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    for variant in item.variants:
+        if not active_for_decode(variant):
+            continue
+        attempt_name = "serdde_attempt_" + snake_name(variant.name)
+        body.append(ast.variable_statement(
+            attempt_name,
+            enum_result(item),
+            helper_call(item, variant, ast.name_expression("value")),
+        ))
+        body.append(ast.if_statement(
+            member(ast.name_expression(attempt_name), "ok"),
+            [ast.return_statement(ast.name_expression(attempt_name))],
+        ))
+    body.append(ast.return_statement(invalid_enum("value did not match any untagged variant")))
+    return body
+
+
+def enum_decode_methods(item: &const[ast.EnumDecl]) -> list[ast.FunctionDecl]:
+    methods: list[ast.FunctionDecl] = []
+    tag = string_option(item.attributes, "tag", "")
+    content = string_option(item.attributes, "content", "")
+    internal_tag = ""
+    if tag != "" and content == "":
+        internal_tag = tag
+    for variant in item.variants:
+        methods.append(decode_payload_method(item, variant, internal_tag))
+    body: list[ast.Statement]
+    if bool_option(item.attributes, "untagged", False):
+        body = untagged_decode_body(item)
+    elif tag == "":
+        body = external_decode_body(item)
+    else:
+        body = tagged_decode_body(item, tag, content)
+    methods.append(ast.FunctionDecl(
+        name="serdde_deserialize",
+        parameters=[value_reference()],
+        return_type=enum_result(item),
+        body=body,
+        is_static=True,
+    ))
+    return methods

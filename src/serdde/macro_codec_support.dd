@@ -101,6 +101,65 @@ def is_template(type: &const[ast.TypeRef], name: str) -> bool:
     return type.kind == ast.TypeKind.Template and type.name == name
 
 
+def variant_value(
+    type: &const[ast.TypeRef],
+    alternative: ast.TypeRef,
+    value: ast.Expression,
+) -> ast.Expression:
+    arguments: list[ast.TypeRef] = [alternative]
+    for child in type.children:
+        arguments.append(child)
+    return ast.template_call_expression(
+        qname("_serdde_variant", "variant_get_as"),
+        arguments,
+        [value],
+    )
+
+
+def same_identity(left: &const[ast.SymbolIdentity], right: &const[ast.SymbolIdentity]) -> bool:
+    return (
+        left.package == right.package
+        and left.module == right.module
+        and left.path == right.path
+        and left.native_identity == right.native_identity
+    )
+
+
+def same_type(left: &const[ast.TypeRef], right: &const[ast.TypeRef]) -> bool:
+    if left.kind != right.kind or left.value != right.value:
+        return False
+    if left.identity.has_value() and right.identity.has_value():
+        if not same_identity(left.identity.value(), right.identity.value()):
+            return False
+    elif left.name != right.name:
+        return False
+    if len(left.children) != len(right.children):
+        return False
+    i: usize = 0
+    while i < len(left.children):
+        if not same_type(left.children[i], right.children[i]):
+            return False
+        i += 1
+    return True
+
+
+def validate_codec_type(type: &const[ast.TypeRef], out: &ast.Expansion):
+    if is_template(type, "variant"):
+        i: usize = 0
+        while i < len(type.children):
+            j = i + 1
+            while j < len(type.children):
+                if same_type(type.children[i], type.children[j]):
+                    out.add_diagnostic(ast.error(
+                        type.children[j].range,
+                        "Serde variant alternatives must have distinct types",
+                    ))
+                j += 1
+            i += 1
+    for child in type.children:
+        validate_codec_type(child, out)
+
+
 def primitive_encoder(type: &const[ast.TypeRef]) -> str:
     if type.kind != ast.TypeKind.Named:
         return ""

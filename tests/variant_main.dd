@@ -1,0 +1,90 @@
+from cpp import variant
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.macros import Serde
+from serdde.value import empty_object_value
+from serdde.value import sequence_value
+from serdde.value import string_value
+
+
+@derive(Serde)
+class Box:
+    value: i32
+
+
+@derive(Serde)
+class Envelope:
+    payload: variant[i32, str, Box, list[i32]]
+    history: list[variant[i32, str]]
+
+
+def round_trip_payload(source: Envelope, expected_index: usize) -> Result[Envelope, i32]:
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return Err(1)
+        case Ok(value):
+            payload = value.field("payload")
+            if payload.field("index").u64_value != u64(expected_index):
+                return Err(2)
+            decoded = from_value[Envelope](value)
+            match decoded:
+                case Err(_):
+                    return Err(3)
+                case Ok(ready):
+                    return Ok(ready)
+
+
+def test_variant_errors() -> i32:
+    payload = empty_object_value()
+    payload.set_field("value", string_value("missing index"))
+    input = empty_object_value()
+    input.set_field("payload", payload)
+    input.set_field("history", sequence_value([]))
+    decoded = from_value[Envelope](input)
+    match decoded:
+        case Ok(_):
+            return 1
+        case Err(error):
+            if error.path_string() != "$.payload.index":
+                return 2
+    return 0
+
+
+def main() -> i32:
+    history: list[variant[i32, str]] = []
+    first: variant[i32, str] = 7
+    second: variant[i32, str] = "ready"
+    history.append(first)
+    history.append(second)
+
+    payload: variant[i32, str, Box, list[i32]] = Box(value=42)
+    decoded = round_trip_payload(Envelope(payload=payload, history=history), 2)
+    match decoded:
+        case Err(code):
+            return 10 + code
+        case Ok(envelope):
+            if envelope.payload.index() != 2:
+                return 20
+            if std.get[Box](envelope.payload).value != 42:
+                return 21
+            if len(envelope.history) != 2:
+                return 22
+            if std.get[i32](envelope.history[0]) != 7:
+                return 23
+            if std.get[str](envelope.history[1]) != "ready":
+                return 24
+
+    values: list[i32] = [2, 3, 5]
+    payload = values
+    decoded = round_trip_payload(Envelope(payload=payload, history=[]), 3)
+    match decoded:
+        case Err(code):
+            return 30 + code
+        case Ok(envelope):
+            if std.get[list[i32]](envelope.payload)[2] != 5:
+                return 34
+    status = test_variant_errors()
+    if status != 0:
+        return 40 + status
+    return 0

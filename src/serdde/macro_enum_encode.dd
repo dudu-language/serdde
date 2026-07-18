@@ -1,4 +1,4 @@
-from serdde.macro_codec import encode_statements
+from serdde.macro_codec_encode import encode_statements
 from serdde.macro_codec_support import ErrorContext
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_codec_support import contexts_with

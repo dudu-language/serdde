@@ -30,3 +30,7 @@ kind = "executable"
 [targets.recursive]
 entry = "tests/recursive_main.dd"
 kind = "executable"
+
+[targets.variant]
+entry = "tests/variant_main.dd"
+kind = "executable"

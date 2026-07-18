@@ -1,0 +1,11 @@
+from cpp import variant
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class InvalidVariant:
+    value: variant[i32, i32]
+
+
+def main() -> i32:
+    return 0

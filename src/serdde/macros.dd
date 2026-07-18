@@ -1,9 +1,10 @@
-from serdde.macro_codec import decode_statements
-from serdde.macro_codec import encode_statements
+from serdde.macro_codec_decode import decode_statements
+from serdde.macro_codec_encode import encode_statements
 from serdde.macro_codec_support import ErrorContext
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_codec_support import contexts_with
 from serdde.macro_codec_support import typed_for
+from serdde.macro_codec_support import validate_codec_type
 from serdde.macro_config import bool_option
 from serdde.macro_config import path_expression
 from serdde.macro_config import serialized_name
@@ -28,6 +29,7 @@ import dudu.ast as ast
 import serdde.convert
 import serdde.error
 import serdde.value
+import serdde.variant_support
 
 
 class SerdeOptions:
@@ -361,6 +363,7 @@ def validate_class(item: &const[ast.ClassDecl], out: &ast.Expansion):
     deny_unknown = bool_option(item.attributes, "deny_unknown_fields", False)
     names: list[str] = []
     for field in item.fields:
+        validate_codec_type(field.type, out)
         name = serialized_name(field.name, field.attributes, rename_all)
         if has_name(names, name):
             out.add_diagnostic(ast.error(field.range, "duplicate serialized field name: " + name))
@@ -403,6 +406,13 @@ def runtime_imports(out: &ast.Expansion):
     out.require_module("serdde.convert", "_serdde_convert")
     out.require_module("serdde.error", "_serdde_error")
     out.require_module("serdde.value", "_serdde_value")
+    out.require_module("serdde.variant_support", "_serdde_variant")
+
+
+def validate_enum_codec_types(item: &const[ast.EnumDecl], out: &ast.Expansion):
+    for variant in item.variants:
+        for field in variant.fields:
+            validate_codec_type(field.type, out)
 
 
 @macro(attributes=SerdeOptions)
@@ -416,6 +426,7 @@ def Serialize(item: ast.Declaration) -> ast.Expansion:
     elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
         enum_target = item.enum_decl.value()
         validate_enum(enum_target, out)
+        validate_enum_codec_types(enum_target, out)
         out.add_method(enum_encode_method(enum_target))
     else:
         out.add_diagnostic(ast.error(ast.SourceRange(), "Serialize requires a class or enum"))
@@ -433,6 +444,7 @@ def Deserialize(item: ast.Declaration) -> ast.Expansion:
     elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
         enum_target = item.enum_decl.value()
         validate_enum(enum_target, out)
+        validate_enum_codec_types(enum_target, out)
         for generated in enum_decode_methods(enum_target):
             out.add_method(generated)
     else:
@@ -452,6 +464,7 @@ def Serde(item: ast.Declaration) -> ast.Expansion:
     elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
         enum_target = item.enum_decl.value()
         validate_enum(enum_target, out)
+        validate_enum_codec_types(enum_target, out)
         out.add_method(enum_encode_method(enum_target))
         for generated in enum_decode_methods(enum_target):
             out.add_method(generated)

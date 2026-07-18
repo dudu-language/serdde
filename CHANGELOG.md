@@ -28,3 +28,10 @@ All notable changes to Serdde are recorded here. The format follows
   overload family. Nested conversion failures retain field and index paths.
 - Generated deserializers allocate hygienic input bindings around user field
   names, including classes with fields named `value` or `input`.
+- Recursive classes and payload enums roundtrip without registration tables or
+  handwritten codec functions.
+- Anonymous `variant[...]` fields serialize as an index plus payload, including
+  nested collection alternatives. Duplicate alternatives are rejected at
+  macro expansion with a source diagnostic.
+- Fixed-array derive coverage exercises ranks two through four through the same
+  recursive codec generator.

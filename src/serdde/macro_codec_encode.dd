@@ -1,0 +1,276 @@
+from serdde.macro_codec_support import ErrorContext
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_codec_support import contexts_with
+from serdde.macro_codec_support import encode_leaf
+from serdde.macro_codec_support import fixed_array_child
+from serdde.macro_codec_support import generic
+from serdde.macro_codec_support import is_template
+from serdde.macro_codec_support import propagated_result
+from serdde.macro_codec_support import typed_for
+from serdde.macro_codec_support import variant_value
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import value_type
+import dudu.ast as ast
+
+
+def encode_sequence(
+    child_type: ast.TypeRef,
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    values_name = names.take("values")
+    index_name = names.take("index")
+    item_name = names.take("item")
+    ready_name = names.take("ready")
+    result.append(ast.variable_statement(
+        values_name,
+        generic("list", [value_type()]),
+        ast.list_expression([]),
+    ))
+    result.append(ast.variable_statement(
+        index_name,
+        ast.named_type("usize"),
+        ast.int_expression("0"),
+    ))
+    item_contexts = contexts_with(
+        contexts,
+        "at_index",
+        ast.name_expression(index_name),
+    )
+    loop_body = encode_statements(
+        child_type,
+        ast.name_expression(item_name),
+        ready_name,
+        item_contexts,
+        names,
+    )
+    loop_body.append(ast.expression_statement(method(
+        ast.name_expression(values_name),
+        "append",
+        [ast.name_expression(ready_name)],
+    )))
+    loop_body.append(ast.compound_assignment_statement(
+        ast.name_expression(index_name),
+        "+=",
+        ast.int_expression("1"),
+    ))
+    result.append(typed_for(item_name, child_type, source, loop_body))
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call(
+            "_serdde_value",
+            "sequence_value",
+            [ast.name_expression(values_name)],
+        ),
+    ))
+    return result
+
+
+def encode_dict(
+    type: &const[ast.TypeRef],
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    if len(type.children) != 2 or type.children[0].name != "str":
+        result.append(ast.return_statement(err(call(
+            "_serdde_error",
+            "unsupported_error",
+            [ast.string_expression("dict keys must be str")],
+        ))))
+        return result
+    key_name = names.take("key")
+    ready_name = names.take("ready")
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "empty_object_value", []),
+    ))
+    key = ast.name_expression(key_name)
+    value = method(source, "at", [key])
+    entry_contexts = contexts_with(contexts, "at_field", key)
+    loop_body = encode_statements(
+        type.children[1],
+        value,
+        ready_name,
+        entry_contexts,
+        names,
+    )
+    loop_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [key, ast.name_expression(ready_name)],
+    )))
+    result.append(typed_for(
+        key_name,
+        ast.named_type("str"),
+        call("_serdde_convert", "dict_keys", [source]),
+        loop_body,
+    ))
+    return result
+
+
+def encode_option(
+    child_type: ast.TypeRef,
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "null_value", []),
+    ))
+    ready_name = names.take("ready")
+    body = encode_statements(
+        child_type,
+        method(source, "value", []),
+        ready_name,
+        contexts,
+        names,
+    )
+    body.append(ast.assignment_statement(
+        ast.name_expression(output_name),
+        ast.name_expression(ready_name),
+    ))
+    result.append(ast.if_statement(method(source, "has_value", []), body))
+    return result
+
+
+def encode_result(
+    type: &const[ast.TypeRef],
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "empty_object_value", []),
+    ))
+    ok_name = names.take("ok")
+    ok_body = encode_statements(
+        type.children[0],
+        member(source, "value"),
+        ok_name,
+        contexts_with(contexts, "at_field", ast.string_expression("Ok")),
+        names,
+    )
+    ok_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [ast.string_expression("Ok"), ast.name_expression(ok_name)],
+    )))
+    err_name = names.take("err")
+    err_body = encode_statements(
+        type.children[1],
+        member(source, "err"),
+        err_name,
+        contexts_with(contexts, "at_field", ast.string_expression("Err")),
+        names,
+    )
+    err_body.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [ast.string_expression("Err"), ast.name_expression(err_name)],
+    )))
+    result.append(ast.if_statement(member(source, "ok"), ok_body))
+    result.append(ast.else_statement(err_body))
+    return result
+
+
+def encode_variant(
+    type: &const[ast.TypeRef],
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(
+        output_name,
+        value_type(),
+        call("_serdde_value", "empty_object_value", []),
+    ))
+    index_name = names.take("variant_index")
+    result.append(ast.variable_statement(
+        index_name,
+        ast.named_type("usize"),
+        call("_serdde_variant", "variant_index", [source]),
+    ))
+    result.append(ast.expression_statement(method(
+        ast.name_expression(output_name),
+        "set_field",
+        [
+            ast.string_expression("index"),
+            call("_serdde_convert", "encode_usize", [ast.name_expression(index_name)]),
+        ],
+    )))
+    i: usize = 0
+    for alternative in type.children:
+        ready_name = names.take("variant_value")
+        body = encode_statements(
+            alternative,
+            variant_value(type, alternative, source),
+            ready_name,
+            contexts_with(contexts, "at_field", ast.string_expression("value")),
+            names,
+        )
+        body.append(ast.expression_statement(method(
+            ast.name_expression(output_name),
+            "set_field",
+            [ast.string_expression("value"), ast.name_expression(ready_name)],
+        )))
+        condition = ast.binary_expression(
+            ast.name_expression(index_name),
+            "==",
+            ast.int_expression(str(i)),
+        )
+        if i == 0:
+            result.append(ast.if_statement(condition, body))
+        else:
+            result.append(ast.elif_statement(condition, body))
+        i += 1
+    return result
+
+
+def encode_statements(
+    type: ast.TypeRef,
+    source: ast.Expression,
+    output_name: str,
+    contexts: list[ErrorContext],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    if is_template(type, "list") or is_template(type, "set"):
+        return encode_sequence(type.children[0], source, output_name, contexts, names)
+    if is_template(type, "dict"):
+        return encode_dict(type, source, output_name, contexts, names)
+    if is_template(type, "Option"):
+        return encode_option(type.children[0], source, output_name, contexts, names)
+    if is_template(type, "Result"):
+        return encode_result(type, source, output_name, contexts, names)
+    if is_template(type, "variant"):
+        return encode_variant(type, source, output_name, contexts, names)
+    if type.kind == ast.TypeKind.FixedArray:
+        return encode_sequence(fixed_array_child(type), source, output_name, contexts, names)
+    result_name = names.take("encoded")
+    return propagated_result(
+        result_name,
+        output_name,
+        value_type(),
+        encode_leaf(type, source),
+        contexts,
+    )

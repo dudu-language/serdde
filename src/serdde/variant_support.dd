@@ -1,0 +1,9 @@
+from cpp import variant
+
+
+def variant_index[V...](value: &const[variant[V...]]) -> usize:
+    return value.index()
+
+
+def variant_get_as[T, V...](value: &const[variant[V...]]) -> &const[T]:
+    return std.get[T](value)

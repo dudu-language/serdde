@@ -39,3 +39,11 @@ expect_failure tests/compile_fail/invalid_rename.dd \
     "unknown Serde rename_all rule: LOUD"
 expect_failure tests/compile_fail/skipped_required.dd \
     "skipped deserialization requires a field default"
+expect_failure tests/compile_fail/compact_missing_id.dd \
+    "compact Serde fields require an explicit non-negative id"
+expect_failure tests/compile_fail/compact_duplicate_id.dd \
+    "duplicate compact Serde field id: 1"
+expect_failure tests/compile_fail/compact_flatten.dd \
+    "compact Serde objects cannot flatten fields"
+expect_failure tests/compile_fail/id_without_compact.dd \
+    "Serde field id requires compact=True on the class"

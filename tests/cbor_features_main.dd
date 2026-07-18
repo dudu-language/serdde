@@ -1,0 +1,310 @@
+from cpp import variant
+from cpp.path import cbor_test_native.hpp
+from serdde.cbor import dumps
+from serdde.cbor import loads
+from serdde.error import SerddeError
+from serdde.macros import Serde
+from serdde.protocol import DecodeTarget
+from serdde.protocol import deserialize_as
+from serdde.protocol import reader_error
+from serdde.protocol import serialize_to
+
+
+@derive(Serde)
+class Box[T]:
+    value: T
+
+
+@derive(Serde)
+class Tree:
+    name: str
+    children: list[Tree]
+
+
+@derive(Serde)
+enum ExternalEvent:
+    Quit
+    Move:
+        x: i32
+        y: i32
+
+
+@derive(Serde)
+@Serde(tag="kind")
+enum InternalEvent:
+    Stop
+    Write:
+        text: str
+
+
+@derive(Serde)
+@Serde(tag="type", content="data")
+enum AdjacentEvent:
+    Ping
+    Count:
+        value: u64
+
+
+@derive(Serde)
+@Serde(untagged=True)
+enum UntaggedValue:
+    Empty
+    Name:
+        name: str
+    Count:
+        count: i32
+
+
+@derive(Serde)
+class Address:
+    city: str
+
+
+@derive(Serde)
+class Flattened:
+    id: i32
+
+    @Serde(flatten=True)
+    address: Address
+
+
+def default_label() -> str:
+    return "generated"
+
+
+def is_zero(value: i32) -> bool:
+    return value == 0
+
+
+@derive(Serde)
+@Serde(rename_all="camelCase", deny_unknown_fields=True)
+class Configured:
+    player_id: u64
+
+    @Serde(rename="displayName", alias=["name"])
+    display_name: str
+
+    @Serde(default=True)
+    score: i32
+
+    @Serde(default_with="default_label")
+    label: str
+
+    @Serde(skip=True, default=True)
+    secret: str
+
+    @Serde(skip_if="is_zero", default=True)
+    hidden_when_zero: i32
+
+
+class Epoch:
+    seconds: i64
+
+
+class EpochSerde:
+    def serialize[Writer](
+        value: &const[Epoch],
+        output: &Writer,
+    ) -> Result[bool, SerddeError]:
+        return serialize_to(value.seconds, output)
+
+    def deserialize[Reader](input: &const[Reader]) -> Result[Epoch, SerddeError]:
+        decoded = deserialize_as(input, DecodeTarget[i64]())
+        if not decoded.ok:
+            return Err(decoded.err)
+        return Ok(Epoch(seconds=decoded.value))
+
+
+@derive(Serde)
+class Adapted:
+    name: str
+
+    @Serde(adapter="EpochSerde")
+    created: Epoch
+
+
+@derive(Serde)
+class Collections:
+    optional: Option[i32]
+    result: Result[list[i32], str]
+    choice: variant[i32, str]
+    tags: set[str]
+    groups: dict[str, list[i32]]
+
+
+def fail(name: str, code: i32) -> i32:
+    print("cbor feature test failed: " + name)
+    return code
+
+
+def test_recursive_and_generic() -> i32:
+    source = Tree(
+        name="root",
+        children=[
+            Tree(name="left", children=[]),
+            Tree(name="right", children=[Tree(name="deep", children=[])]),
+        ],
+    )
+    encoded = dumps(Box[Tree](value=source))
+    if not encoded.ok:
+        return fail("recursive write", 1)
+    decoded = loads[Box[Tree]](encoded.value)
+    if not decoded.ok:
+        return fail("recursive read", 2)
+    tree = decoded.value.value
+    if tree.name != "root" or len(tree.children) != 2:
+        return fail("recursive fields", 3)
+    if tree.children[1].children[0].name != "deep":
+        return fail("recursive depth", 4)
+    return 0
+
+
+def test_enums() -> i32:
+    external_encoded = dumps(ExternalEvent.Move(x=3, y=4))
+    if not external_encoded.ok or serdde_cbor_test.hex(external_encoded.value) != (
+        "a1644d6f7665a2617803617904"
+    ):
+        return fail("external canonical bytes", 13)
+    external = loads[ExternalEvent](external_encoded.value)
+    if not external.ok:
+        return fail("external enum", 1)
+    match external.value:
+        case ExternalEvent.Move(x, y):
+            if x != 3 or y != 4:
+                return fail("external payload", 2)
+        case _:
+            return fail("external variant", 3)
+
+    internal_encoded = dumps(InternalEvent.Write(text="hello"))
+    if not internal_encoded.ok or serdde_cbor_test.hex(internal_encoded.value) != (
+        "a2646b696e6465577269746564746578746568656c6c6f"
+    ):
+        return fail("internal canonical bytes", 14)
+    internal = loads[InternalEvent](internal_encoded.value)
+    if not internal.ok:
+        return fail("internal enum", 4)
+    match internal.value:
+        case InternalEvent.Write(text):
+            if text != "hello":
+                return fail("internal payload", 5)
+        case _:
+            return fail("internal variant", 6)
+
+    adjacent_encoded = dumps(AdjacentEvent.Count(value=42))
+    if not adjacent_encoded.ok or serdde_cbor_test.hex(adjacent_encoded.value) != (
+        "a26464617461a16576616c7565182a647479706565436f756e74"
+    ):
+        return fail("adjacent canonical bytes", 15)
+    adjacent = loads[AdjacentEvent](adjacent_encoded.value)
+    if not adjacent.ok:
+        return fail("adjacent enum", 7)
+    match adjacent.value:
+        case AdjacentEvent.Count(value):
+            if value != 42:
+                return fail("adjacent payload", 8)
+        case _:
+            return fail("adjacent variant", 9)
+
+    untagged_encoded = dumps(UntaggedValue.Count(count=11))
+    if not untagged_encoded.ok or serdde_cbor_test.hex(untagged_encoded.value) != (
+        "a165636f756e740b"
+    ):
+        return fail("untagged canonical bytes", 16)
+    untagged = loads[UntaggedValue](untagged_encoded.value)
+    if not untagged.ok:
+        return fail("untagged enum", 10)
+    match untagged.value:
+        case UntaggedValue.Count(count):
+            if count != 11:
+                return fail("untagged payload", 11)
+        case _:
+            return fail("untagged variant", 12)
+    return 0
+
+
+def test_configuration() -> i32:
+    flattened = Flattened(id=3, address=Address(city="Paris"))
+    flattened_encoded = dumps(flattened)
+    if not flattened_encoded.ok:
+        return fail("flatten write", 1)
+    flattened_ready = loads[Flattened](flattened_encoded.value)
+    if not flattened_ready.ok:
+        return fail("flatten read", 2)
+    if flattened_ready.value.id != 3 or flattened_ready.value.address.city != "Paris":
+        return fail("flatten fields", 3)
+
+    configured = Configured(
+        player_id=9,
+        display_name="Ada",
+        score=0,
+        label="kept",
+        secret="hidden",
+        hidden_when_zero=0,
+    )
+    configured_encoded = dumps(configured)
+    if not configured_encoded.ok:
+        return fail("configured write", 4)
+    configured_ready = loads[Configured](configured_encoded.value)
+    if not configured_ready.ok:
+        print(configured_ready.err.message)
+        return fail("configured read", 5)
+    if configured_ready.value.display_name != "Ada":
+        return fail("rename", 6)
+    if configured_ready.value.hidden_when_zero != 0 or configured_ready.value.secret != "":
+        return fail("skip policy", 7)
+    return 0
+
+
+def test_adapter_and_collections() -> i32:
+    adapted = Adapted(name="launch", created=Epoch(seconds=123456))
+    adapted_encoded = dumps(adapted)
+    if not adapted_encoded.ok:
+        return fail("adapter write", 1)
+    adapted_ready = loads[Adapted](adapted_encoded.value)
+    if not adapted_ready.ok or adapted_ready.value.created.seconds != 123456:
+        return fail("adapter read", 2)
+
+    tags: set[str] = {"compiler", "serde"}
+    groups: dict[str, list[i32]] = {}
+    groups["primes"] = [2, 3, 5]
+    choice: variant[i32, str] = "ready"
+    source = Collections(
+        optional=7,
+        result=Ok([11, 13]),
+        choice=choice,
+        tags=tags,
+        groups=groups,
+    )
+    encoded = dumps(source)
+    if not encoded.ok:
+        return fail("collections write", 3)
+    ready = loads[Collections](encoded.value)
+    if not ready.ok:
+        return fail("collections read", 4)
+    if not ready.value.optional.has_value() or ready.value.optional.value() != 7:
+        return fail("option", 5)
+    if not ready.value.result.ok or ready.value.result.value[1] != 13:
+        return fail("result", 6)
+    if std.get[str](ready.value.choice) != "ready":
+        return fail("variant", 7)
+    if not ready.value.tags.contains("serde"):
+        return fail("set", 8)
+    if ready.value.groups.at("primes")[2] != 5:
+        return fail("dict", 9)
+    return 0
+
+
+def main() -> i32:
+    status = test_recursive_and_generic()
+    if status != 0:
+        return 10 + status
+    status = test_enums()
+    if status != 0:
+        return 30 + status
+    status = test_configuration()
+    if status != 0:
+        return 60 + status
+    status = test_adapter_and_collections()
+    if status != 0:
+        return 90 + status
+    return 0

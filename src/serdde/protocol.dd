@@ -137,7 +137,7 @@ def serialize_to[Writer, T](
     value: &const[set[T]],
     output: &Writer,
 ) -> Result[bool, SerddeError]:
-    started = write_ok(output, output.begin_sequence(len(value)))
+    started = write_ok(output, output.begin_set(len(value)))
     if not started.ok:
         return started
     index: usize = 0

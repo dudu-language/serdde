@@ -24,6 +24,7 @@ public:
   std::string output() const { return *output_; }
   std::string take_output() { return std::move(*output_); }
   void reserve(std::size_t size) { output_->reserve(size); }
+  bool canonical_object_order() const { return false; }
 
   bool write_null() { return scalar("null"); }
   bool write_bool(bool value) {
@@ -71,7 +72,14 @@ public:
     return true;
   }
 
+  bool begin_set(std::size_t size) { return begin_sequence(size); }
+
   bool begin_object(std::size_t size) { return begin_object(size, false); }
+  bool begin_object_ordered(std::size_t size) { return begin_object(size); }
+  bool begin_object_compact(std::size_t size) { return begin_object(size); }
+  bool begin_object_compact_ordered(std::size_t size) {
+    return begin_object(size);
+  }
   bool begin_object_checked(std::size_t size) {
     return begin_object(size, true);
   }
@@ -95,6 +103,10 @@ public:
     output_->push_back('=');
     frame.expecting_value = true;
     return true;
+  }
+
+  bool write_field_id(const std::string &name, std::uint64_t) {
+    return write_field(name);
   }
 
   bool end_sequence() { return end(FrameKind::Sequence, "])"); }

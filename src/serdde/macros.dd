@@ -1,3 +1,4 @@
+from serdde.macro_class_direct import canonical_encode_fields_method
 from serdde.macro_class_direct import decode_method as direct_decode_method
 from serdde.macro_class_direct import encode_fields_method
 from serdde.macro_class_direct import encode_method as direct_encode_method
@@ -5,6 +6,7 @@ from serdde.macro_class_direct import field_count_method
 from serdde.macro_class_direct import field_has_default
 from serdde.macro_codec_support import validate_codec_type
 from serdde.macro_config import bool_option
+from serdde.macro_config import int_option
 from serdde.macro_config import serialized_name
 from serdde.macro_config import string_list_option
 from serdde.macro_config import string_option
@@ -35,11 +37,20 @@ class SerdeOptions:
     content: str = ""
     untagged: bool = False
     adapter: str = ""
+    compact: bool = False
+    id: i64 = -1
 
 
 def has_name(values: &const[list[str]], name: str) -> bool:
     for value in values:
         if value == name:
+            return True
+    return False
+
+
+def has_id(values: &const[list[i64]], id: i64) -> bool:
+    for value in values:
+        if value == id:
             return True
     return False
 
@@ -58,6 +69,8 @@ def validate_class(item: &const[ast.ClassDecl], out: &ast.Expansion):
     if bool_option(item.attributes, "untagged", False):
         out.add_diagnostic(ast.error(item.range, "Serde untagged is only valid on enums"))
     deny_unknown = bool_option(item.attributes, "deny_unknown_fields", False)
+    compact = bool_option(item.attributes, "compact", False)
+    ids: list[i64] = []
     names: list[str] = []
     for field in item.fields:
         validate_codec_type(field.type, out)
@@ -87,6 +100,36 @@ def validate_class(item: &const[ast.ClassDecl], out: &ast.Expansion):
                 "skipped deserialization requires a field default, default=True, or default_with",
             ))
         flatten = bool_option(field.attributes, "flatten", False)
+        field_id = int_option(field.attributes, "id", -1)
+        active = not (
+            bool_option(field.attributes, "skip", False)
+            or (
+                bool_option(field.attributes, "skip_serializing", False)
+                and bool_option(field.attributes, "skip_deserializing", False)
+            )
+        )
+        if compact and flatten:
+            out.add_diagnostic(ast.error(
+                field.range,
+                "compact Serde objects cannot flatten fields",
+            ))
+        if compact and active and field_id < 0:
+            out.add_diagnostic(ast.error(
+                field.range,
+                "compact Serde fields require an explicit non-negative id",
+            ))
+        if not compact and field_id >= 0:
+            out.add_diagnostic(ast.error(
+                field.range,
+                "Serde field id requires compact=True on the class",
+            ))
+        if compact and field_id >= 0:
+            if has_id(ids, field_id):
+                out.add_diagnostic(ast.error(
+                    field.range,
+                    "duplicate compact Serde field id: " + str(field_id),
+                ))
+            ids.append(field_id)
         if flatten and deny_unknown:
             out.add_diagnostic(ast.error(
                 field.range,
@@ -107,8 +150,18 @@ def runtime_imports(out: &ast.Expansion):
 
 
 def validate_enum_codec_types(item: &const[ast.EnumDecl], out: &ast.Expansion):
+    if bool_option(item.attributes, "compact", False):
+        out.add_diagnostic(ast.error(
+            item.range,
+            "compact Serde encoding is only valid on classes",
+        ))
     for variant in item.variants:
         for field in variant.fields:
+            if int_option(field.attributes, "id", -1) >= 0:
+                out.add_diagnostic(ast.error(
+                    field.range,
+                    "Serde field id is only valid in compact classes",
+                ))
             validate_codec_type(field.type, out)
 
 
@@ -121,6 +174,7 @@ def Serialize(item: ast.Declaration) -> ast.Expansion:
         validate_class(class_target, out)
         out.add_method(field_count_method(class_target))
         out.add_method(encode_fields_method(class_target))
+        out.add_method(canonical_encode_fields_method(class_target))
         out.add_method(direct_encode_method(class_target))
     elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():
         enum_target = item.enum_decl.value()
@@ -160,6 +214,7 @@ def Serde(item: ast.Declaration) -> ast.Expansion:
         validate_class(class_target, out)
         out.add_method(field_count_method(class_target))
         out.add_method(encode_fields_method(class_target))
+        out.add_method(canonical_encode_fields_method(class_target))
         out.add_method(direct_encode_method(class_target))
         out.add_method(direct_decode_method(class_target))
     elif item.kind == ast.DeclarationKind.Enum and item.enum_decl.has_value():

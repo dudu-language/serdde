@@ -1,0 +1,11 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class StrayId:
+    @Serde(id=1)
+    value: i32
+
+
+def main() -> i32:
+    return 0

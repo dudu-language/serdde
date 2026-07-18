@@ -1,4 +1,5 @@
 from serdde.macro_class_direct import bool_result
+from serdde.macro_class_direct import canonical_before
 from serdde.macro_class_direct import checked_write
 from serdde.macro_class_direct import failed_result
 from serdde.macro_class_direct import protocol_call
@@ -25,6 +26,35 @@ def skipped_for_encode(field: &const[ast.FieldDecl]) -> bool:
         bool_option(field.attributes, "skip", False)
         or bool_option(field.attributes, "skip_serializing", False)
     )
+
+
+def has_flattened_field(variant: &const[ast.EnumVariant]) -> bool:
+    for field in variant.fields:
+        if not skipped_for_encode(field) and bool_option(field.attributes, "flatten", False):
+            return True
+    return False
+
+
+def ordered_fields(
+    variant: &const[ast.EnumVariant],
+    canonical: bool,
+) -> list[ast.FieldDecl]:
+    result: list[ast.FieldDecl] = []
+    for field in variant.fields:
+        result.append(field)
+        if canonical:
+            index = len(result) - 1
+            while index > 0 and canonical_before(
+                result[index],
+                result[index - 1],
+                False,
+                "",
+            ):
+                previous = result[index - 1]
+                result[index - 1] = result[index]
+                result[index] = previous
+                index -= 1
+    return result
 
 
 def payload_count_statements(
@@ -120,20 +150,35 @@ def payload_field_statements(
 def payload_statements(
     variant: &const[ast.EnumVariant],
     names: &GeneratedNames,
+    canonical: bool,
 ) -> list[ast.Statement]:
     body: list[ast.Statement] = []
-    for field in variant.fields:
-        if skipped_for_encode(field):
-            continue
-        field_body = payload_field_statements(field, names)
-        skip_if = string_option(field.attributes, "skip_if", "")
-        if skip_if == "":
-            append_statements(body, field_body)
-        else:
-            source = ast.name_expression(field.name)
-            predicate = ast.call_expression(path_expression(skip_if), [source])
-            body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
+    for field in ordered_fields(variant, canonical):
+        append_payload_field(body, field, names)
     return body
+
+
+def append_payload_field(
+    body: &list[ast.Statement],
+    field: &const[ast.FieldDecl],
+    names: &GeneratedNames,
+):
+    if skipped_for_encode(field):
+        return
+    field_body = payload_field_statements(field, names)
+    skip_if = string_option(field.attributes, "skip_if", "")
+    if skip_if == "":
+        append_statements(body, field_body)
+    else:
+        source = ast.name_expression(field.name)
+        predicate = ast.call_expression(path_expression(skip_if), [source])
+        body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
+
+
+def canonical_name_before(left: str, right: str) -> bool:
+    if len(left) != len(right):
+        return len(left) < len(right)
+    return left < right
 
 
 def checked_protocol_write(
@@ -152,12 +197,16 @@ def begin_object(
     body: &list[ast.Statement],
     count: ast.Expression,
     name: str,
+    ordered: bool,
 ):
+    method_name = "begin_object"
+    if ordered:
+        method_name = "begin_object_ordered"
     checked_protocol_write(body, protocol_call(
         "write_ok",
         [
             ast.name_expression("output"),
-            method(ast.name_expression("output"), "begin_object", [count]),
+            method(ast.name_expression("output"), method_name, [count]),
         ],
     ), name)
 
@@ -208,11 +257,13 @@ def write_payload_object(
     body: &list[ast.Statement],
     variant: &const[ast.EnumVariant],
     names: &GeneratedNames,
+    canonical: bool,
 ):
     count_name = names.take("payload_count")
     append_statements(body, payload_count_statements(variant, count_name))
-    begin_object(body, ast.name_expression(count_name), names.take("payload_started"))
-    append_statements(body, payload_statements(variant, names))
+    ordered = canonical and not has_flattened_field(variant)
+    begin_object(body, ast.name_expression(count_name), names.take("payload_started"), ordered)
+    append_statements(body, payload_statements(variant, names, ordered))
     checked_protocol_write(body, protocol_call(
         "write_ok",
         [
@@ -226,6 +277,7 @@ def external_body(
     variant: &const[ast.EnumVariant],
     serialized: str,
     names: &GeneratedNames,
+    canonical: bool,
 ) -> list[ast.Statement]:
     body: list[ast.Statement] = []
     if len(variant.fields) == 0:
@@ -241,7 +293,7 @@ def external_body(
             ],
         )))
         return body
-    begin_object(body, ast.int_expression("1"), names.take("outer_started"))
+    begin_object(body, ast.int_expression("1"), names.take("outer_started"), canonical)
     checked_protocol_write(body, protocol_call(
         "write_ok",
         [
@@ -253,7 +305,7 @@ def external_body(
             ),
         ],
     ), names.take("variant_field"))
-    write_payload_object(body, variant, names)
+    write_payload_object(body, variant, names, canonical)
     end_object(body)
     return body
 
@@ -263,17 +315,33 @@ def internal_body(
     serialized: str,
     tag: str,
     names: &GeneratedNames,
+    canonical: bool,
 ) -> list[ast.Statement]:
     body: list[ast.Statement] = []
     count_name = names.take("payload_count")
     append_statements(body, payload_count_statements(variant, count_name))
+    ordered = canonical and not has_flattened_field(variant)
     begin_object(
         body,
         ast.binary_expression(ast.name_expression(count_name), "+", ast.int_expression("1")),
         names.take("outer_started"),
+        ordered,
     )
-    write_field_and_string(body, tag, serialized, names)
-    append_statements(body, payload_statements(variant, names))
+    if not ordered:
+        write_field_and_string(body, tag, serialized, names)
+        append_statements(body, payload_statements(variant, names, False))
+    else:
+        tag_written = False
+        for field in ordered_fields(variant, True):
+            if skipped_for_encode(field):
+                continue
+            field_name = serialized_name(field.name, field.attributes, "")
+            if not tag_written and canonical_name_before(tag, field_name):
+                write_field_and_string(body, tag, serialized, names)
+                tag_written = True
+            append_payload_field(body, field, names)
+        if not tag_written:
+            write_field_and_string(body, tag, serialized, names)
     end_object(body)
     return body
 
@@ -284,13 +352,20 @@ def adjacent_body(
     tag: str,
     content: str,
     names: &GeneratedNames,
+    canonical: bool,
 ) -> list[ast.Statement]:
     body: list[ast.Statement] = []
     count = "1"
     if len(variant.fields) > 0:
         count = "2"
-    begin_object(body, ast.int_expression(count), names.take("outer_started"))
-    write_field_and_string(body, tag, serialized, names)
+    begin_object(body, ast.int_expression(count), names.take("outer_started"), canonical)
+    content_first = (
+        canonical
+        and len(variant.fields) > 0
+        and canonical_name_before(content, tag)
+    )
+    if not content_first:
+        write_field_and_string(body, tag, serialized, names)
     if len(variant.fields) > 0:
         checked_protocol_write(body, protocol_call(
             "write_ok",
@@ -303,7 +378,9 @@ def adjacent_body(
                 ),
             ],
         ), names.take("content_field"))
-        write_payload_object(body, variant, names)
+        write_payload_object(body, variant, names, canonical)
+    if content_first:
+        write_field_and_string(body, tag, serialized, names)
     end_object(body)
     return body
 
@@ -311,6 +388,7 @@ def adjacent_body(
 def untagged_body(
     variant: &const[ast.EnumVariant],
     names: &GeneratedNames,
+    canonical: bool,
 ) -> list[ast.Statement]:
     body: list[ast.Statement] = []
     if len(variant.fields) == 0:
@@ -322,9 +400,28 @@ def untagged_body(
             ],
         )))
         return body
-    write_payload_object(body, variant, names)
+    write_payload_object(body, variant, names, canonical)
     body.append(ast.return_statement(ok(ast.bool_expression(True))))
     return body
+
+
+def variant_body(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    tag: str,
+    content: str,
+    untagged: bool,
+    canonical: bool,
+) -> list[ast.Statement]:
+    names = generated_names_for_variant(variant)
+    serialized = enum_name(item, variant)
+    if untagged:
+        return untagged_body(variant, names, canonical)
+    if tag == "":
+        return external_body(variant, serialized, names, canonical)
+    if content == "":
+        return internal_body(variant, serialized, tag, names, canonical)
+    return adjacent_body(variant, serialized, tag, content, names, canonical)
 
 
 def enum_encode_method(item: &const[ast.EnumDecl]) -> ast.FunctionDecl:
@@ -342,16 +439,26 @@ def enum_encode_method(item: &const[ast.EnumDecl]) -> ast.FunctionDecl:
                 "enum variant is skipped during serialization: " + variant.name,
             )))
         else:
-            names = generated_names_for_variant(variant)
-            serialized = enum_name(item, variant)
-            if untagged:
-                case_body = untagged_body(variant, names)
-            elif tag == "":
-                case_body = external_body(variant, serialized, names)
-            elif content == "":
-                case_body = internal_body(variant, serialized, tag, names)
-            else:
-                case_body = adjacent_body(variant, serialized, tag, content, names)
+            canonical_body = variant_body(
+                item,
+                variant,
+                tag,
+                content,
+                untagged,
+                True,
+            )
+            case_body.append(ast.if_statement(
+                method(ast.name_expression("output"), "canonical_object_order", []),
+                canonical_body,
+            ))
+            append_statements(case_body, variant_body(
+                item,
+                variant,
+                tag,
+                content,
+                untagged,
+                False,
+            ))
         cases.append(ast.unguarded_case_statement(variant_pattern(item, variant), case_body))
     return ast.FunctionDecl(
         name="serdde_serialize",

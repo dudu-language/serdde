@@ -419,10 +419,33 @@ public:
     dson_detail::Node value;
     return find_field(name, value);
   }
+  std::size_t field_count(const std::string &name) const {
+    if (!is_object())
+      return 0;
+    std::size_t count = 0;
+    for (std::size_t index = 0; index < node_.count; ++index) {
+      if (key(index) == name)
+        ++count;
+    }
+    return count;
+  }
   DsonReader field(const std::string &name) const {
     dson_detail::Node value;
     return find_field(name, value) ? DsonReader(source_, value)
                                    : DsonReader(source_, {});
+  }
+  bool has_field_id(const std::string &name, std::uint64_t) const {
+    return has_field(name);
+  }
+  std::size_t field_count_id(const std::string &name, std::uint64_t) const {
+    return field_count(name);
+  }
+  DsonReader field_id(const std::string &name, std::uint64_t) const {
+    return field(name);
+  }
+  bool key_matches(std::size_t index, const std::string &name,
+                   std::uint64_t) const {
+    return key(index) == name;
   }
 
 private:

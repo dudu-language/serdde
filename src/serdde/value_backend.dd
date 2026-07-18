@@ -24,6 +24,9 @@ class ValueWriter:
     def error_message(self: &const[Self]) -> str:
         return self.message
 
+    def canonical_object_order(self: &const[Self]) -> bool:
+        return False
+
     def attach(self, value: Value) -> bool:
         if len(self.stack) == 0:
             self.root = value
@@ -76,11 +79,23 @@ class ValueWriter:
         self.checked_objects.append(False)
         return True
 
+    def begin_set(self, size: usize) -> bool:
+        return self.begin_sequence(size)
+
     def begin_object(self, size: usize) -> bool:
         self.stack.append(empty_object_value())
         self.fields.append("")
         self.checked_objects.append(False)
         return True
+
+    def begin_object_ordered(self, size: usize) -> bool:
+        return self.begin_object(size)
+
+    def begin_object_compact(self, size: usize) -> bool:
+        return self.begin_object(size)
+
+    def begin_object_compact_ordered(self, size: usize) -> bool:
+        return self.begin_object(size)
 
     def begin_object_checked(self, size: usize) -> bool:
         self.stack.append(empty_object_value())
@@ -100,6 +115,9 @@ class ValueWriter:
             return False
         self.fields[index] = name
         return True
+
+    def write_field_id(self, name: str, id: u64) -> bool:
+        return self.write_field(name)
 
     def end_container(self) -> bool:
         if len(self.stack) == 0:
@@ -192,5 +210,22 @@ class ValueReader:
     def has_field(self: &const[Self], name: str) -> bool:
         return self.value.kind == ValueKind.Object and self.value.has_field(name)
 
+    def field_count(self: &const[Self], name: str) -> usize:
+        if self.has_field(name):
+            return 1
+        return 0
+
     def field(self: &const[Self], name: str) -> ValueReader:
         return ValueReader(value=self.value.field(name))
+
+    def has_field_id(self: &const[Self], name: str, id: u64) -> bool:
+        return self.has_field(name)
+
+    def field_count_id(self: &const[Self], name: str, id: u64) -> usize:
+        return self.field_count(name)
+
+    def field_id(self: &const[Self], name: str, id: u64) -> ValueReader:
+        return self.field(name)
+
+    def key_matches(self: &const[Self], index: usize, name: str, id: u64) -> bool:
+        return self.key(index) == name

@@ -142,6 +142,17 @@ def bool_option(
     return ast.bool_argument(options.value(), name, fallback)
 
 
+def int_option(
+    attributes: &const[list[ast.Attribute]],
+    name: str,
+    fallback: i64,
+) -> i64:
+    options = option_attribute(attributes)
+    if not options.has_value():
+        return fallback
+    return ast.int_argument(options.value(), name, fallback)
+
+
 def string_list_option(
     attributes: &const[list[ast.Attribute]],
     name: str,

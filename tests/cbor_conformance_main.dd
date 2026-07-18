@@ -1,0 +1,139 @@
+from cpp.path import cbor_test_native.hpp
+from serdde.cbor import dumps
+from serdde.cbor import loads
+from serdde.error import ErrorKind
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class PathRecord:
+    values: list[i32]
+
+
+def fail(name: str, code: i32) -> i32:
+    print("cbor conformance test failed: " + name)
+    return code
+
+
+def has_hex[T](value: &const[T], expected: str) -> bool:
+    encoded = dumps(value)
+    if not encoded.ok:
+        return False
+    return serdde_cbor_test.hex(encoded.value) == expected
+
+
+def test_scalar_encoding() -> i32:
+    if not has_hex(False, "f4") or not has_hex(True, "f5"):
+        return fail("booleans", 1)
+    if not has_hex("", "60") or not has_hex("IETF", "6449455446"):
+        return fail("text", 2)
+    character: char = char(120)
+    if not has_hex(character, "6178"):
+        return fail("character", 3)
+
+    if not has_hex(u64(0), "00") or not has_hex(u64(23), "17"):
+        return fail("small unsigned", 4)
+    if not has_hex(u64(24), "1818") or not has_hex(u64(255), "18ff"):
+        return fail("u8 argument", 5)
+    if not has_hex(u64(256), "190100") or not has_hex(u64(65535), "19ffff"):
+        return fail("u16 argument", 6)
+    if not has_hex(u64(65536), "1a00010000"):
+        return fail("u32 argument", 7)
+    if not has_hex(u64(0xffffffffffffffff), "1bffffffffffffffff"):
+        return fail("u64 argument", 8)
+
+    if not has_hex(i64(-1), "20") or not has_hex(i64(-24), "37"):
+        return fail("small negative", 9)
+    if not has_hex(i64(-25), "3818") or not has_hex(i64(-256), "38ff"):
+        return fail("negative u8 argument", 10)
+    if not has_hex(i64(-257), "390100"):
+        return fail("negative u16 argument", 11)
+
+    if not has_hex(f64(0.0), "f90000") or not has_hex(f64(-0.0), "f98000"):
+        return fail("zero floats", 12)
+    if not has_hex(f64(1.5), "f93e00"):
+        return fail("half float", 13)
+    if not has_hex(f64(100000.0), "fa47c35000"):
+        return fail("single float", 14)
+    if not has_hex(f64(1.1), "fb3ff199999999999a"):
+        return fail("double float", 15)
+    return 0
+
+
+def test_collections() -> i32:
+    values: list[i32] = [1, 2, 3]
+    if not has_hex(values, "83010203"):
+        return fail("list", 1)
+    fixed: array[i32][3] = [1, 2, 3]
+    if not has_hex(fixed, "83010203"):
+        return fail("fixed array", 2)
+    unique: set[i32] = {3, 1, 2}
+    if not has_hex(unique, "83010203"):
+        return fail("set", 3)
+    table: dict[str, i32] = {}
+    table["b"] = 2
+    table["a"] = 1
+    if not has_hex(table, "a2616101616202"):
+        return fail("canonical map", 4)
+
+    decoded = loads[list[i32]](serdde_cbor_test.bytes("83010203"))
+    if not decoded.ok or len(decoded.value) != 3 or decoded.value[2] != 3:
+        return fail("RFC array decode", 5)
+    decoded_map = loads[dict[str, i32]](serdde_cbor_test.bytes("a2616101616202"))
+    if not decoded_map.ok or decoded_map.value["a"] != 1 or decoded_map.value["b"] != 2:
+        return fail("RFC map decode", 6)
+    return 0
+
+
+def test_diagnostics() -> i32:
+    overflow = loads[i8](serdde_cbor_test.bytes("18ff"))
+    if overflow.ok or overflow.err.kind != ErrorKind.Type:
+        return fail("integer overflow", 1)
+    wrong_kind = loads[i32](serdde_cbor_test.bytes("63626164"))
+    if wrong_kind.ok or wrong_kind.err.kind != ErrorKind.Type:
+        return fail("wrong kind", 2)
+
+    nested = loads[PathRecord](serdde_cbor_test.bytes("a16676616c756573820163626164"))
+    if nested.ok:
+        return fail("nested type failure", 3)
+    if nested.err.path_string() != "$.values[1]":
+        print(nested.err.path_string())
+        return fail("nested error path", 4)
+    if nested.err.format != "cbor" or nested.err.offset != 10:
+        return fail("nested source position", 5)
+
+    missing = loads[PathRecord](serdde_cbor_test.bytes("a0"))
+    if missing.ok or missing.err.kind != ErrorKind.MissingField:
+        return fail("missing field", 6)
+    if missing.err.path_string() != "$.values":
+        return fail("missing field path", 7)
+
+    duplicate = loads[dict[str, i32]](serdde_cbor_test.bytes("a2616101616102"))
+    if duplicate.ok or duplicate.err.kind != ErrorKind.Syntax:
+        return fail("duplicate map key", 8)
+    invalid_utf8 = loads[str](serdde_cbor_test.bytes("61ff"))
+    if invalid_utf8.ok or invalid_utf8.err.kind != ErrorKind.Syntax:
+        return fail("invalid UTF-8", 9)
+    tagged = loads[i32](serdde_cbor_test.bytes("c100"))
+    if tagged.ok or tagged.err.kind != ErrorKind.Syntax:
+        return fail("unsupported tag", 10)
+    indefinite = loads[list[i32]](serdde_cbor_test.bytes("9f01ff"))
+    if indefinite.ok or indefinite.err.kind != ErrorKind.Syntax:
+        return fail("indefinite length", 11)
+    non_finite = loads[f64](serdde_cbor_test.bytes("f97c00"))
+    if non_finite.ok or non_finite.err.kind != ErrorKind.Type:
+        return fail("non-finite float", 12)
+    return 0
+
+
+def main() -> i32:
+    scalar = test_scalar_encoding()
+    if scalar != 0:
+        return scalar
+    collections = test_collections()
+    if collections != 0:
+        return 20 + collections
+    diagnostics = test_diagnostics()
+    if diagnostics != 0:
+        return 40 + diagnostics
+    return 0

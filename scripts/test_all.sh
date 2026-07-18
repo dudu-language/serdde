@@ -7,7 +7,7 @@ cd "$root"
 printf '==> dudu tests\n'
 dudu test --quiet
 
-targets=(tests derive config enums generics recursive variant json dson adapters)
+targets=(tests derive config enums generics recursive variant json dson cbor cbor_features cbor_conformance adapters protocol_probe)
 for target in "${targets[@]}"; do
     printf '==> %s\n' "$target"
     dudu run "$target" --quiet

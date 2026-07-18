@@ -1,0 +1,15 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+@Serde(compact=True)
+class DuplicateId:
+    @Serde(id=1)
+    left: i32
+
+    @Serde(id=1)
+    right: i32
+
+
+def main() -> i32:
+    return 0

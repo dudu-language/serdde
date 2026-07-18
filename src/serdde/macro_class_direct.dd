@@ -1,5 +1,6 @@
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_config import bool_option
+from serdde.macro_config import int_option
 from serdde.macro_config import path_expression
 from serdde.macro_config import serialized_name
 from serdde.macro_config import string_list_option
@@ -149,6 +150,7 @@ def field_count_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
 def encode_one_field(
     field: &const[ast.FieldDecl],
     field_name: str,
+    compact: bool,
     names: &GeneratedNames,
 ) -> list[ast.Statement]:
     source = member(ast.name_expression("self"), field.name)
@@ -162,6 +164,14 @@ def encode_one_field(
         )
     result: list[ast.Statement] = []
     field_result = names.take("field")
+    field_method = "write_field"
+    field_arguments: list[ast.Expression] = [serialized_name_expr]
+    if compact:
+        field_method = "write_field_id"
+        field_arguments.append(ast.call_expression(
+            ast.name_expression("u64"),
+            [ast.int_expression(str(int_option(field.attributes, "id", -1)))],
+        ))
     for statement in checked_write(
         protocol_call(
             "write_ok",
@@ -169,8 +179,8 @@ def encode_one_field(
                 ast.name_expression("output"),
                 method(
                     ast.name_expression("output"),
-                    "write_field",
-                    [serialized_name_expr],
+                    field_method,
+                    field_arguments,
                 ),
             ],
         ),
@@ -196,15 +206,59 @@ def encode_one_field(
     return result
 
 
-def encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+def canonical_before(
+    left: &const[ast.FieldDecl],
+    right: &const[ast.FieldDecl],
+    compact: bool,
+    rename_all: str,
+) -> bool:
+    if compact:
+        return int_option(left.attributes, "id", -1) < int_option(right.attributes, "id", -1)
+    left_name = serialized_name(left.name, left.attributes, rename_all)
+    right_name = serialized_name(right.name, right.attributes, rename_all)
+    if len(left_name) != len(right_name):
+        return len(left_name) < len(right_name)
+    return left_name < right_name
+
+
+def ordered_fields(
+    item: &const[ast.ClassDecl],
+    canonical: bool,
+) -> list[ast.FieldDecl]:
+    result: list[ast.FieldDecl] = []
+    compact = bool_option(item.attributes, "compact", False)
+    rename_all = string_option(item.attributes, "rename_all", "")
+    for field in item.fields:
+        result.append(field)
+        if canonical:
+            index = len(result) - 1
+            while index > 0 and canonical_before(
+                result[index],
+                result[index - 1],
+                compact,
+                rename_all,
+            ):
+                previous = result[index - 1]
+                result[index - 1] = result[index]
+                result[index] = previous
+                index -= 1
+    return result
+
+
+def make_encode_fields_method(
+    item: &const[ast.ClassDecl],
+    name: str,
+    canonical: bool,
+) -> ast.FunctionDecl:
     body: list[ast.Statement] = []
     names = GeneratedNames()
     rename_all = string_option(item.attributes, "rename_all", "")
-    for field in item.fields:
+    compact = bool_option(item.attributes, "compact", False)
+    for field in ordered_fields(item, canonical):
         if skipped_for_encode(field):
             continue
         field_name = serialized_name(field.name, field.attributes, rename_all)
-        field_body = encode_one_field(field, field_name, names)
+        field_body = encode_one_field(field, field_name, compact, names)
         skip_if = string_option(field.attributes, "skip_if", "")
         if skip_if == "":
             for statement in field_body:
@@ -215,7 +269,7 @@ def encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
     body.append(ast.return_statement(ok(ast.bool_expression(True))))
     return ast.FunctionDecl(
-        name="serdde_serialize_fields",
+        name=name,
         generic_parameters=[ast.generic_parameter("Writer")],
         parameters=[self_reference(), writer_parameter()],
         return_type=bool_result(),
@@ -223,11 +277,16 @@ def encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     )
 
 
-def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+def encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    return make_encode_fields_method(item, "serdde_serialize_fields", False)
+
+
+def canonical_encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    return make_encode_fields_method(item, "serdde_serialize_fields_canonical", True)
+
+
+def encode_object_body(begin_method: str, fields_method: str) -> list[ast.Statement]:
     body: list[ast.Statement] = []
-    begin_method = "begin_object"
-    if has_flattened_field(item):
-        begin_method = "begin_object_checked"
     started = protocol_call(
         "write_ok",
         [
@@ -249,7 +308,7 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
         bool_result(),
         method(
             ast.name_expression("self"),
-            "serdde_serialize_fields",
+            fields_method,
             [ast.name_expression("output")],
         ),
     ))
@@ -264,6 +323,26 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             method(ast.name_expression("output"), "end_object", []),
         ],
     )))
+    return body
+
+
+def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    begin_method = "begin_object"
+    if has_flattened_field(item):
+        begin_method = "begin_object_checked"
+    elif bool_option(item.attributes, "compact", False):
+        begin_method = "begin_object_compact"
+    if not has_flattened_field(item):
+        ordered_begin = "begin_object_ordered"
+        if bool_option(item.attributes, "compact", False):
+            ordered_begin = "begin_object_compact_ordered"
+        body.append(ast.if_statement(
+            method(ast.name_expression("output"), "canonical_object_order", []),
+            encode_object_body(ordered_begin, "serdde_serialize_fields_canonical"),
+        ))
+    for statement in encode_object_body(begin_method, "serdde_serialize_fields"):
+        body.append(statement)
     return ast.FunctionDecl(
         name="serdde_serialize",
         generic_parameters=[ast.generic_parameter("Writer")],
@@ -306,6 +385,7 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
         )))],
     ))
     rename_all = string_option(item.attributes, "rename_all", "")
+    compact = bool_option(item.attributes, "compact", False)
     accepted: list[str] = []
     constructor_arguments: list[ast.Expression] = []
     for field in item.fields:
@@ -359,6 +439,28 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
         candidates: list[str] = [field_name]
         for alias in aliases:
             candidates.append(alias)
+        if compact:
+            field_id = ast.call_expression(
+                ast.name_expression("u64"),
+                [ast.int_expression(str(int_option(field.attributes, "id", -1)))],
+            )
+            body.append(ast.if_statement(
+                ast.binary_expression(
+                    method(
+                        input,
+                        "field_count_id",
+                        [ast.string_expression(field_name), field_id],
+                    ),
+                    ">",
+                    ast.int_expression("1"),
+                ),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "duplicate_field_error",
+                    [ast.string_expression(field_name)],
+                )))],
+            ))
+        candidate_index: usize = 0
         for candidate in candidates:
             duplicate = ast.if_statement(
                 ast.name_expression(present),
@@ -368,8 +470,16 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
                     [ast.string_expression(candidate)],
                 )))],
             )
+            presence_method = "has_field"
+            presence_arguments: list[ast.Expression] = [ast.string_expression(candidate)]
+            if compact and candidate_index == 0:
+                presence_method = "has_field_id"
+                presence_arguments.append(ast.call_expression(
+                    ast.name_expression("u64"),
+                    [ast.int_expression(str(int_option(field.attributes, "id", -1)))],
+                ))
             body.append(ast.if_statement(
-                method(input, "has_field", [ast.string_expression(candidate)]),
+                method(input, presence_method, presence_arguments),
                 [
                     duplicate,
                     ast.assignment_statement(
@@ -382,6 +492,15 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
                     ),
                 ],
             ))
+            candidate_index += 1
+        field_access_method = "field"
+        field_access_arguments: list[ast.Expression] = [ast.name_expression(selected)]
+        if compact:
+            field_access_method = "field_id"
+            field_access_arguments.append(ast.call_expression(
+                ast.name_expression("u64"),
+                [ast.int_expression(str(int_option(field.attributes, "id", -1)))],
+            ))
         if field_has_default(field):
             body.append(ast.variable_statement(
                 field.name,
@@ -392,7 +511,7 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             decode_body: list[ast.Statement] = [ast.variable_statement(
                 decoded,
                 result_type(field.type),
-                decode_expression(field, method(input, "field", [ast.name_expression(selected)])),
+                decode_expression(field, method(input, field_access_method, field_access_arguments)),
             )]
             decode_body.append(ast.if_statement(
                 failed_result(ast.name_expression(decoded)),
@@ -419,7 +538,7 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             body.append(ast.variable_statement(
                 decoded,
                 result_type(field.type),
-                decode_expression(field, method(input, "field", [ast.name_expression(selected)])),
+                decode_expression(field, method(input, field_access_method, field_access_arguments)),
             ))
             body.append(ast.if_statement(
                 failed_result(ast.name_expression(decoded)),
@@ -442,12 +561,33 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
         key = names.take("key")
         body.append(ast.variable_statement(index, ast.named_type("usize"), ast.int_expression("0")))
         comparisons: list[ast.Expression] = []
-        for name in accepted:
-            comparisons.append(ast.binary_expression(
-                ast.name_expression(key),
-                "!=",
-                ast.string_expression(name),
-            ))
+        if compact:
+            for field in item.fields:
+                if skipped_for_decode(field):
+                    continue
+                field_name = serialized_name(field.name, field.attributes, rename_all)
+                field_id = ast.call_expression(
+                    ast.name_expression("u64"),
+                    [ast.int_expression(str(int_option(field.attributes, "id", -1)))],
+                )
+                comparisons.append(ast.unary_expression("not", method(
+                    input,
+                    "key_matches",
+                    [ast.name_expression(index), ast.string_expression(field_name), field_id],
+                )))
+                for alias in string_list_option(field.attributes, "alias"):
+                    comparisons.append(ast.unary_expression("not", method(
+                        input,
+                        "key_matches",
+                        [ast.name_expression(index), ast.string_expression(alias), field_id],
+                    )))
+        else:
+            for name in accepted:
+                comparisons.append(ast.binary_expression(
+                    ast.name_expression(key),
+                    "!=",
+                    ast.string_expression(name),
+                ))
         unknown = ast.bool_expression(True)
         for comparison in comparisons:
             unknown = ast.binary_expression(unknown, "and", comparison)

@@ -1,0 +1,252 @@
+from cpp.path import cbor_test_native.hpp
+from serdde.cbor import dumps
+from serdde.cbor import dumps_into
+from serdde.cbor import dumps_value
+from serdde.cbor import loads
+from serdde.error import ErrorKind
+from serdde.macros import Serde
+from serdde.value import ValueKind
+from serdde.value import empty_object_value
+from serdde.value import i64_value
+from serdde.value import string_value
+
+
+@derive(Serde)
+class CborRecord:
+    id: u64
+    name: str
+    scores: list[i32]
+
+
+@derive(Serde)
+class CborRecordReordered:
+    scores: list[i32]
+    name: str
+    id: u64
+
+
+@derive(Serde)
+class CborRecordAdded:
+    name: str
+
+    @Serde(default=True)
+    level: i32
+
+    scores: list[i32]
+    id: u64
+
+
+@derive(Serde)
+class CborRecordRemoved:
+    name: str
+    id: u64
+
+
+@derive(Serde)
+class CborRecordRenamed:
+    id: u64
+
+    @Serde(rename="display_name", alias=["name"])
+    display_name: str
+
+    scores: list[i32]
+
+
+@derive(Serde)
+@Serde(deny_unknown_fields=True)
+class StrictCborRecord:
+    id: u64
+
+
+@derive(Serde)
+@Serde(compact=True)
+class CompactRecord:
+    @Serde(id=9)
+    scores: list[i32]
+
+    @Serde(id=1)
+    name: str
+
+    @Serde(id=2)
+    hp: i32
+
+
+@derive(Serde)
+@Serde(compact=True)
+class CompactRecordReordered:
+    @Serde(id=2)
+    hp: i32
+
+    @Serde(id=1)
+    name: str
+
+    @Serde(id=9)
+    scores: list[i32]
+
+
+@derive(Serde)
+@Serde(compact=True)
+class CompactRenamed:
+    @Serde(id=9)
+    scores: list[i32]
+
+    @Serde(id=1, rename="displayName", alias=["name"])
+    display_name: str
+
+    @Serde(id=2)
+    hp: i32
+
+
+@derive(Serde)
+@Serde(compact=True)
+class CompactAddedField:
+    @Serde(id=2)
+    hp: i32
+
+    @Serde(id=1)
+    name: str
+
+    @Serde(id=3, default=True)
+    level: i32
+
+
+def fail(name: str, code: i32) -> i32:
+    print("cbor test failed: " + name)
+    return code
+
+
+def main() -> i32:
+    record = CborRecord(id=7, name="Ada", scores=[2, 3, 5])
+    encoded = dumps(record)
+    payload: str = ""
+    match encoded:
+        case Err(_):
+            return fail("typed write", 1)
+        case Ok(value):
+            payload = value
+    expected = "a362696407646e616d65634164616673636f72657383020305"
+    if serdde_cbor_test.hex(payload) != expected:
+        print(serdde_cbor_test.hex(payload))
+        return fail("deterministic golden bytes", 2)
+
+    decoded = loads[CborRecord](payload)
+    match decoded:
+        case Err(_):
+            return fail("typed read", 3)
+        case Ok(value):
+            if value.id != 7 or value.name != "Ada":
+                return fail("typed fields", 4)
+            if len(value.scores) != 3 or value.scores[2] != 5:
+                return fail("typed sequence", 5)
+
+    reordered = CborRecordReordered(scores=[2, 3, 5], name="Ada", id=7)
+    reordered_encoded = dumps(reordered)
+    if not reordered_encoded.ok or reordered_encoded.value != payload:
+        return fail("field reorder canonical bytes", 24)
+    reordered_decoded = loads[CborRecordReordered](payload)
+    if not reordered_decoded.ok or reordered_decoded.value.scores[1] != 3:
+        return fail("field reorder decode", 25)
+
+    added = loads[CborRecordAdded](payload)
+    if not added.ok or added.value.level != 0 or added.value.name != "Ada":
+        return fail("field addition", 26)
+    removed = loads[CborRecordRemoved](payload)
+    if not removed.ok or removed.value.id != 7 or removed.value.name != "Ada":
+        return fail("field removal", 27)
+    renamed = loads[CborRecordRenamed](payload)
+    if not renamed.ok or renamed.value.display_name != "Ada":
+        return fail("field alias", 28)
+    strict = loads[StrictCborRecord](payload)
+    if strict.ok or strict.err.kind != ErrorKind.UnknownField:
+        return fail("unknown field policy", 29)
+
+    destination = "capacity retained across writes"
+    reused = dumps_into(record, destination)
+    if not reused.ok or destination != payload:
+        return fail("reusable output", 6)
+
+    float_encoded = dumps(f64(1.5))
+    match float_encoded:
+        case Err(_):
+            return fail("float write", 7)
+        case Ok(value):
+            if serdde_cbor_test.hex(value) != "f93e00":
+                return fail("preferred float encoding", 8)
+
+    malformed = loads[CborRecord](serdde_cbor_test.bytes("a16269"))
+    if malformed.ok:
+        return fail("truncated input", 9)
+
+    trailing = payload + serdde_cbor_test.bytes("00")
+    if loads[CborRecord](trailing).ok:
+        return fail("trailing input", 10)
+
+    compact = CompactRecord(scores=[2, 3], name="Ada", hp=42)
+    compact_encoded = dumps(compact)
+    compact_payload: str = ""
+    match compact_encoded:
+        case Err(_):
+            return fail("compact write", 11)
+        case Ok(value):
+            compact_payload = value
+    if serdde_cbor_test.hex(compact_payload) != "a3016341646102182a09820203":
+        print(serdde_cbor_test.hex(compact_payload))
+        return fail("compact golden bytes", 12)
+    compact_reordered = CompactRecordReordered(hp=42, name="Ada", scores=[2, 3])
+    compact_reordered_encoded = dumps(compact_reordered)
+    if not compact_reordered_encoded.ok or compact_reordered_encoded.value != compact_payload:
+        return fail("compact field reorder canonical bytes", 30)
+    compact_decoded = loads[CompactRecord](compact_payload)
+    match compact_decoded:
+        case Err(_):
+            return fail("compact read", 13)
+        case Ok(value):
+            if value.name != "Ada" or value.hp != 42 or value.scores[1] != 3:
+                return fail("compact fields", 14)
+
+    old_payload = serdde_cbor_test.bytes("a2016341646102182a")
+    evolved = loads[CompactAddedField](old_payload)
+    match evolved:
+        case Err(_):
+            return fail("compact evolution read", 15)
+        case Ok(value):
+            if value.name != "Ada" or value.hp != 42 or value.level != 0:
+                return fail("compact evolution defaults", 16)
+    evolved_from_full = loads[CompactAddedField](compact_payload)
+    if not evolved_from_full.ok or evolved_from_full.value.level != 0:
+        return fail("compact field removal", 31)
+
+    compact_alias = loads[CompactRenamed](compact_payload)
+    if not compact_alias.ok or compact_alias.value.display_name != "Ada":
+        return fail("compact field alias", 32)
+
+    duplicate_compact_key = serdde_cbor_test.bytes(
+        "a4016341646102182a09820203646e616d6563457665",
+    )
+    duplicate_compact = loads[CompactRecord](duplicate_compact_key)
+    if duplicate_compact.ok:
+        return fail("compact id and name duplicate", 17)
+    if duplicate_compact.err.kind != ErrorKind.DuplicateField:
+        return fail("compact duplicate diagnostic", 18)
+
+    dynamic_source = empty_object_value()
+    dynamic_source.set_field("name", string_value("Ada"))
+    dynamic_source.set_field("score", i64_value(-3))
+    dynamic_encoded = dumps_value(dynamic_source)
+    match dynamic_encoded:
+        case Err(_):
+            return fail("dynamic write", 19)
+        case Ok(value):
+            dynamic_decoded = loads(value)
+            match dynamic_decoded:
+                case Err(_):
+                    return fail("dynamic read", 20)
+                case Ok(root):
+                    if root.kind != ValueKind.Object:
+                        return fail("dynamic object kind", 21)
+                    if root.field("name").string_value != "Ada":
+                        return fail("dynamic string", 22)
+                    if root.field("score").i64_value != -3:
+                        return fail("dynamic signed integer", 23)
+
+    return 0

@@ -1,0 +1,17 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Nested:
+    value: i32
+
+
+@derive(Serde)
+@Serde(compact=True)
+class CompactFlatten:
+    @Serde(id=1, flatten=True)
+    nested: Nested
+
+
+def main() -> i32:
+    return 0

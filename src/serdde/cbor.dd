@@ -1,0 +1,164 @@
+from cpp.path import cbor_wire_reader.hpp
+from cpp.path import cbor_wire_writer.hpp
+from serdde.error import SerddeError
+from serdde.error import syntax_error
+from serdde.error import type_error
+from serdde.protocol import deserialize_from
+from serdde.protocol import reader_error
+from serdde.protocol import serialize_to
+from serdde.protocol import write_ok
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import bool_value
+from serdde.value import empty_object_value
+from serdde.value import f64_value
+from serdde.value import i64_value
+from serdde.value import null_value
+from serdde.value import sequence_value
+from serdde.value import string_value
+from serdde.value import u64_value
+
+
+def located(value: Value, input: &const[serdde_wire.CborReader]) -> Value:
+    value.line = input.line()
+    value.column = input.column()
+    value.offset = input.offset()
+    return value
+
+
+def decode_value(input: &const[serdde_wire.CborReader]) -> Result[Value, SerddeError]:
+    if input.is_null():
+        return Ok(located(null_value(), input))
+    flag: bool = False
+    if input.get_bool(flag):
+        return Ok(located(bool_value(flag), input))
+    if input.is_negative_integer():
+        signed: i64 = 0
+        if input.get_i64(signed):
+            return Ok(located(i64_value(signed), input))
+    if input.is_unsigned_integer():
+        unsigned: u64 = 0
+        if input.get_u64(unsigned):
+            return Ok(located(u64_value(unsigned), input))
+    if input.is_float():
+        floating: f64 = 0.0
+        if input.get_f64(floating):
+            return Ok(located(f64_value(floating), input))
+    text: str = ""
+    if input.get_string(text):
+        return Ok(located(string_value(text), input))
+    if input.is_sequence():
+        values: list[Value] = []
+        index: usize = 0
+        while index < input.size():
+            decoded = decode_value(input.element(index))
+            if not decoded.ok:
+                return Err(decoded.err.at_index(index))
+            values.append(decoded.value)
+            index += 1
+        return Ok(located(sequence_value(values), input))
+    if input.is_object():
+        value = located(empty_object_value(), input)
+        index: usize = 0
+        while index < input.size():
+            key = input.key(index)
+            decoded = decode_value(input.element(index))
+            if not decoded.ok:
+                return Err(decoded.err.at_field(key))
+            value.set_field(key, decoded.value)
+            index += 1
+        return Ok(value)
+    return Err(reader_error(input, "unsupported CBOR value"))
+
+
+def loads(source: &const[str]) -> Result[Value, SerddeError]:
+    input = serdde_wire.CborReader(source)
+    if not input.valid():
+        return Err(syntax_error(
+            input.error_message(),
+            input.line(),
+            input.column(),
+            input.offset(),
+        ).with_format("cbor"))
+    return decode_value(input)
+
+
+def loads[T](source: &const[str]) -> Result[T, SerddeError]:
+    input = serdde_wire.CborReader(source)
+    if not input.valid():
+        return Err(syntax_error(
+            input.error_message(),
+            input.line(),
+            input.column(),
+            input.offset(),
+        ).with_format("cbor"))
+    return deserialize_from[T, serdde_wire.CborReader](input)
+
+
+def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
+    output = serdde_wire.CborWriter()
+    encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("cbor"))
+    return Ok(output.take_output())
+
+
+def encode_value(
+    value: &const[Value],
+    output: &serdde_wire.CborWriter,
+) -> Result[bool, SerddeError]:
+    if value.kind == ValueKind.Null:
+        return write_ok(output, output.write_null())
+    if value.kind == ValueKind.Bool:
+        return write_ok(output, output.write_bool(value.bool_value))
+    if value.kind == ValueKind.I64:
+        return write_ok(output, output.write_i64(value.i64_value))
+    if value.kind == ValueKind.U64:
+        return write_ok(output, output.write_u64(value.u64_value))
+    if value.kind == ValueKind.F64:
+        return write_ok(output, output.write_f64(value.f64_value))
+    if value.kind == ValueKind.String:
+        return write_ok(output, output.write_string(value.string_value))
+    if value.kind == ValueKind.Sequence:
+        started = write_ok(output, output.begin_sequence(len(value.sequence_value)))
+        if not started.ok:
+            return started
+        index: usize = 0
+        for item in value.sequence_value:
+            encoded = encode_value(item, output)
+            if not encoded.ok:
+                return Err(encoded.err.at_index(index))
+            index += 1
+        return write_ok(output, output.end_sequence())
+    if value.kind == ValueKind.Object:
+        started = write_ok(output, output.begin_object(len(value.object_order)))
+        if not started.ok:
+            return started
+        for key in value.object_order:
+            field = write_ok(output, output.write_field(key))
+            if not field.ok:
+                return field
+            encoded = encode_value(value.field(key), output)
+            if not encoded.ok:
+                return Err(encoded.err.at_field(key))
+        return write_ok(output, output.end_object())
+    return Err(type_error("unknown Value kind").with_format("cbor"))
+
+
+def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
+    output = serdde_wire.CborWriter()
+    encoded = encode_value(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("cbor"))
+    return Ok(output.take_output())
+
+
+def dumps_into[T](
+    value: &const[T],
+    destination: &str,
+) -> Result[bool, SerddeError]:
+    output = serdde_wire.CborWriter(destination)
+    encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("cbor"))
+    return Ok(True)

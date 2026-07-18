@@ -106,8 +106,9 @@ struct JsonDocument {
     yyjson_read_err parse_error{};
     // yyjson accepts mutable storage because its optional in-situ mode edits
     // the input. YYJSON_READ_NOFLAG guarantees that this buffer is read-only.
-    document = yyjson_read_opts(const_cast<char *>(source.data()), source.size(),
-                                YYJSON_READ_NOFLAG, nullptr, &parse_error);
+    document =
+        yyjson_read_opts(const_cast<char *>(source.data()), source.size(),
+                         YYJSON_READ_NOFLAG, nullptr, &parse_error);
     if (document == nullptr) {
       error = parse_error.msg == nullptr ? "invalid JSON" : parse_error.msg;
       error_offset = parse_error.pos;
@@ -164,6 +165,7 @@ public:
   std::string output() const { return *output_; }
   std::string take_output() { return std::move(*output_); }
   void reserve(std::size_t size) { output_->reserve(size); }
+  bool canonical_object_order() const { return false; }
 
   bool write_null() { return scalar("null"); }
   bool write_bool(bool value) { return scalar(value ? "true" : "false"); }
@@ -213,7 +215,13 @@ public:
   }
 
   bool begin_sequence(std::size_t) { return begin('[', FrameKind::Sequence); }
+  bool begin_set(std::size_t size) { return begin_sequence(size); }
   bool begin_object(std::size_t) { return begin('{', FrameKind::Object); }
+  bool begin_object_ordered(std::size_t size) { return begin_object(size); }
+  bool begin_object_compact(std::size_t size) { return begin_object(size); }
+  bool begin_object_compact_ordered(std::size_t size) {
+    return begin_object(size);
+  }
   bool begin_object_checked(std::size_t size) {
     if (!begin('{', FrameKind::Object)) {
       return false;
@@ -253,6 +261,10 @@ public:
     output_->push_back(':');
     frame.expecting_value = true;
     return true;
+  }
+
+  bool write_field_id(const std::string &name, std::uint64_t) {
+    return write_field(name);
   }
 
   bool end_sequence() { return end(']', FrameKind::Sequence); }
@@ -453,11 +465,40 @@ public:
            yyjson_obj_getn(value_, name.data(), name.size()) != nullptr;
   }
 
+  std::size_t field_count(const std::string &name) const {
+    if (!yyjson_is_obj(value_))
+      return 0;
+    std::size_t count = 0;
+    yyjson_obj_iter iterator = yyjson_obj_iter_with(value_);
+    yyjson_val *key = nullptr;
+    while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
+      if (yyjson_get_len(key) == name.size() &&
+          std::string_view(yyjson_get_str(key), yyjson_get_len(key)) == name) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
   JsonReader field(const std::string &name) const {
     return JsonReader(document_,
                       yyjson_is_obj(value_)
                           ? yyjson_obj_getn(value_, name.data(), name.size())
                           : nullptr);
+  }
+
+  bool has_field_id(const std::string &name, std::uint64_t) const {
+    return has_field(name);
+  }
+  std::size_t field_count_id(const std::string &name, std::uint64_t) const {
+    return field_count(name);
+  }
+  JsonReader field_id(const std::string &name, std::uint64_t) const {
+    return field(name);
+  }
+  bool key_matches(std::size_t index, const std::string &name,
+                   std::uint64_t) const {
+    return key(index) == name;
   }
 
 private:

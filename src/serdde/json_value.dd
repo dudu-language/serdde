@@ -1,0 +1,17 @@
+from serdde.error import SerddeError
+from serdde.json_parser import parse_json
+from serdde.json_writer import write_json
+from serdde.value import Value
+
+
+def loads_value(source: str) -> Result[Value, SerddeError]:
+    return parse_json(source)
+
+
+def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
+    encoded = write_json(value)
+    match encoded:
+        case Err(error):
+            return Err(error.with_format("json"))
+        case Ok(text):
+            return Ok(text)

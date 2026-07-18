@@ -2,9 +2,9 @@ from cpp.path import json_test_native.hpp
 from serdde.error import ErrorKind
 from serdde.json import dumps
 from serdde.json import dumps_into
-from serdde.json import dumps_value
 from serdde.json import loads
 from serdde.json_parser import parse_json
+from serdde.json_value import dumps_value
 from serdde.macros import Serde
 from serdde.value import Value
 from serdde.value import ValueKind

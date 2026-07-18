@@ -11,14 +11,16 @@ from schemas import NestedRecord
 from schemas import SmallRecord
 from schemas import StringRecord
 from serdde.cbor import dumps as dumps_cbor
-from serdde.cbor import dumps_value as dumps_cbor_value
 from serdde.cbor import loads as loads_cbor
+from serdde.cbor_value import dumps_value as dumps_cbor_value
+from serdde.cbor_value import loads_value as loads_cbor_value
 from serdde.convert import from_value
 from serdde.convert import to_value
 from serdde.error import SerddeError
 from serdde.json import dumps as dumps_json
-from serdde.json import dumps_value as dumps_json_value
 from serdde.json import loads as loads_json
+from serdde.json_value import dumps_value as dumps_json_value
+from serdde.json_value import loads_value as loads_json_value
 from serdde.value import Value
 
 
@@ -70,9 +72,9 @@ def encode_value[T](value: &const[T], format_name: str) -> Result[str, SerddeErr
 def decode_value[T](source: &const[str], format_name: str) -> Result[T, SerddeError]:
     tree: Result[Value, SerddeError]
     if format_name == "cbor":
-        tree = loads_cbor(source)
+        tree = loads_cbor_value(source)
     else:
-        tree = loads_json(source)
+        tree = loads_json_value(source)
     if not tree.ok:
         return Err(tree.err)
     return from_value[T](tree.value)

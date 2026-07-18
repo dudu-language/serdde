@@ -1,0 +1,17 @@
+from serdde.dson_parser import parse_dson
+from serdde.dson_writer import write_dson
+from serdde.error import SerddeError
+from serdde.value import Value
+
+
+def loads_value(source: str) -> Result[Value, SerddeError]:
+    return parse_dson(source)
+
+
+def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
+    encoded = write_dson(value)
+    match encoded:
+        case Err(error):
+            return Err(error.with_format("dson"))
+        case Ok(text):
+            return Ok(text)

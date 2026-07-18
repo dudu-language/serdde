@@ -1,18 +1,11 @@
 from cpp.path import dson_wire_reader.hpp
 from cpp.path import dson_wire_writer.hpp
-from serdde.dson_parser import parse_dson
-from serdde.dson_writer import write_dson
 from serdde.error import SerddeError
 from serdde.error import syntax_error
 from serdde.protocol import deserialize_from
 from serdde.protocol import deserialize_with_from
 from serdde.protocol import serialize_to
 from serdde.protocol import serialize_with_to
-from serdde.value import Value
-
-
-def loads(source: str) -> Result[Value, SerddeError]:
-    return parse_dson(source)
 
 
 def loads[T](source: &const[str]) -> Result[T, SerddeError]:
@@ -37,15 +30,6 @@ def loads_with[T, Adapter](source: &const[str]) -> Result[T, SerddeError]:
             input.offset(),
         ).with_format("dson"))
     return deserialize_with_from[T, serdde_wire.DsonReader, Adapter](input)
-
-
-def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
-    encoded = write_dson(value)
-    match encoded:
-        case Err(error):
-            return Err(error.with_format("dson"))
-        case Ok(text):
-            return Ok(text)
 
 
 def dumps[T](value: &const[T]) -> Result[str, SerddeError]:

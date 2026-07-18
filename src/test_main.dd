@@ -8,8 +8,8 @@ from serdde.convert import to_value
 from serdde.error import ErrorKind
 from serdde.error import SerddeError
 from serdde.error import type_error
-from serdde.json import dumps_value
-from serdde.json import loads
+from serdde.json_value import dumps_value
+from serdde.json_value import loads_value
 from serdde.protocol import DecodeTarget
 from serdde.protocol import deserialize_as
 from serdde.protocol import reader_error
@@ -52,7 +52,7 @@ class CodecProbe:
 
 
 def expect_roundtrip(source: str) -> i32:
-    parsed = loads(source)
+    parsed = loads_value(source)
     match parsed:
         case Err(_):
             return 1
@@ -62,7 +62,7 @@ def expect_roundtrip(source: str) -> i32:
                 case Err(_):
                     return 2
                 case Ok(text):
-                    reparsed = loads(text)
+                    reparsed = loads_value(text)
                     match reparsed:
                         case Err(_):
                             return 3
@@ -75,7 +75,7 @@ def main() -> i32:
         return 1
     if expect_roundtrip("{\"name\":\"Ada\",\"active\":true,\"values\":[1,-2,3.5]}") != 0:
         return 2
-    unicode = loads("\"\\u0041\\ud83d\\ude00\"")
+    unicode = loads_value("\"\\u0041\\ud83d\\ude00\"")
     match unicode:
         case Err(_):
             return 3
@@ -84,7 +84,7 @@ def main() -> i32:
                 return 4
             if len(value.string_value) != 5:
                 return 5
-    malformed = loads("{\"a\":1,}")
+    malformed = loads_value("{\"a\":1,}")
     match malformed:
         case Ok(_):
             return 6
@@ -128,6 +128,6 @@ def public_smoke_test():
     encoded = encode_i32(42)
     assert encoded.kind == ValueKind.I64
     assert encoded.i64_value == 42
-    parsed = loads("{\"ready\":true}")
+    parsed = loads_value("{\"ready\":true}")
     assert parsed.ok
     assert parsed.value.field("ready").bool_value

@@ -1,17 +1,10 @@
 from cpp.path import json_wire_native.hpp
 from serdde.error import SerddeError
 from serdde.error import syntax_error
-from serdde.json_parser import parse_json
-from serdde.json_writer import write_json
 from serdde.protocol import deserialize_from
 from serdde.protocol import deserialize_with_from
 from serdde.protocol import serialize_to
 from serdde.protocol import serialize_with_to
-from serdde.value import Value
-
-
-def loads(source: str) -> Result[Value, SerddeError]:
-    return parse_json(source)
 
 
 def loads[T](source: &const[str]) -> Result[T, SerddeError]:
@@ -36,15 +29,6 @@ def loads_with[T, Adapter](source: &const[str]) -> Result[T, SerddeError]:
             input.offset(),
         ).with_format("json"))
     return deserialize_with_from[T, serdde_wire.JsonReader, Adapter](input)
-
-
-def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
-    encoded = write_json(value)
-    match encoded:
-        case Err(error):
-            return Err(error.with_format("json"))
-        case Ok(text):
-            return Ok(text)
 
 
 def dumps[T](value: &const[T]) -> Result[str, SerddeError]:

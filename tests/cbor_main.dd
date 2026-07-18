@@ -1,8 +1,9 @@
 from cpp.path import cbor_test_native.hpp
 from serdde.cbor import dumps
 from serdde.cbor import dumps_into
-from serdde.cbor import dumps_value
 from serdde.cbor import loads
+from serdde.cbor_value import dumps_value
+from serdde.cbor_value import loads_value
 from serdde.error import ErrorKind
 from serdde.macros import Serde
 from serdde.value import ValueKind
@@ -237,7 +238,7 @@ def main() -> i32:
         case Err(_):
             return fail("dynamic write", 19)
         case Ok(value):
-            dynamic_decoded = loads(value)
+            dynamic_decoded = loads_value(value)
             match dynamic_decoded:
                 case Err(_):
                     return fail("dynamic read", 20)

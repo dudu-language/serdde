@@ -1,72 +1,248 @@
-from cpp.path import benchmark_clock.hpp
-from serdde.json import dumps
-from serdde.json import loads
-from serdde.macros import Serde
+from cpp.path import benchmark_native.hpp
+from schemas import ArrayRecord
+from schemas import BenchEvent
+from schemas import EventRecord
+from schemas import MapRecord
+from schemas import NestedLeaf
+from schemas import NestedLevel2
+from schemas import NestedLevel3
+from schemas import NestedLevel4
+from schemas import NestedRecord
+from schemas import SmallRecord
+from schemas import StringRecord
+from serdde.cbor import dumps as dumps_cbor
+from serdde.cbor import dumps_value as dumps_cbor_value
+from serdde.cbor import loads as loads_cbor
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.error import SerddeError
+from serdde.json import dumps as dumps_json
+from serdde.json import dumps_value as dumps_json_value
+from serdde.json import loads as loads_json
+from serdde.value import Value
 
 
-@derive(Serde)
-class BenchRecord:
-    id: u64
-    name: str
-    active: bool
-    scores: list[i32]
-    metadata: dict[str, str]
+def report(
+    implementation: str,
+    format_name: str,
+    workload: str,
+    operation: str,
+    iterations: i32,
+    elapsed_ns: u64,
+    wire_bytes: usize,
+    allocations: u64,
+    allocated_bytes: u64,
+    checksum: u64,
+):
+    print("implementation=" + implementation)
+    print("format=" + format_name)
+    print("workload=" + workload)
+    print("operation=" + operation)
+    print("iterations=" + str(iterations))
+    print("elapsed_ns=" + str(elapsed_ns))
+    print("wire_bytes=" + str(wire_bytes))
+    print("allocation_count=" + str(allocations))
+    print("allocated_bytes=" + str(allocated_bytes))
+    print("checksum=" + str(checksum))
 
 
-def elapsed_ms(start: u64, finish: u64) -> f64:
-    return f64(finish - start) / 1000000.0
+def encode_direct[T](value: &const[T], format_name: str) -> Result[str, SerddeError]:
+    if format_name == "cbor":
+        return dumps_cbor(value)
+    return dumps_json(value)
+
+
+def decode_direct[T](source: &const[str], format_name: str) -> Result[T, SerddeError]:
+    if format_name == "cbor":
+        return loads_cbor[T](source)
+    return loads_json[T](source)
+
+
+def encode_value[T](value: &const[T], format_name: str) -> Result[str, SerddeError]:
+    tree = to_value(value)
+    if not tree.ok:
+        return Err(tree.err)
+    if format_name == "cbor":
+        return dumps_cbor_value(tree.value)
+    return dumps_json_value(tree.value)
+
+
+def decode_value[T](source: &const[str], format_name: str) -> Result[T, SerddeError]:
+    tree: Result[Value, SerddeError]
+    if format_name == "cbor":
+        tree = loads_cbor(source)
+    else:
+        tree = loads_json(source)
+    if not tree.ok:
+        return Err(tree.err)
+    return from_value[T](tree.value)
+
+
+def run_case[T](value: &const[T], workload: str, default_iterations: i32) -> i32:
+    format_name = serdde_benchmark.environment("SERDDE_BENCH_FORMAT", "json")
+    implementation = serdde_benchmark.environment(
+        "SERDDE_BENCH_IMPLEMENTATION",
+        "serdde-direct",
+    )
+    operation = serdde_benchmark.environment("SERDDE_BENCH_OPERATION", "encode")
+    iterations = serdde_benchmark.environment_i32(
+        "SERDDE_BENCH_ITERATIONS",
+        default_iterations,
+    )
+
+    source_result: Result[str, SerddeError]
+    if implementation == "serdde-value":
+        source_result = encode_value(value, format_name)
+    else:
+        source_result = encode_direct(value, format_name)
+    if not source_result.ok:
+        print(source_result.err.message)
+        return 2
+    source = source_result.value
+
+    checksum: u64 = 0
+    serdde_benchmark.reset_allocations()
+    start = serdde_benchmark.now_ns()
+    i: i32 = 0
+    if operation == "decode":
+        while i < iterations:
+            decoded: Result[T, SerddeError]
+            if implementation == "serdde-value":
+                decoded = decode_value[T](source, format_name)
+            else:
+                decoded = decode_direct[T](source, format_name)
+            if not decoded.ok:
+                print(decoded.err.message)
+                return 3
+            serdde_benchmark.consume(decoded.value)
+            checksum += 1
+            i += 1
+    else:
+        while i < iterations:
+            encoded: Result[str, SerddeError]
+            if implementation == "serdde-value":
+                encoded = encode_value(value, format_name)
+            else:
+                encoded = encode_direct(value, format_name)
+            if not encoded.ok:
+                print(encoded.err.message)
+                return 4
+            checksum += u64(len(encoded.value))
+            i += 1
+    finish = serdde_benchmark.now_ns()
+    allocations = serdde_benchmark.allocation_count()
+    allocated_bytes = serdde_benchmark.allocated_bytes()
+    report(
+        implementation,
+        format_name,
+        workload,
+        operation,
+        iterations,
+        finish - start,
+        len(source),
+        allocations,
+        allocated_bytes,
+        checksum,
+    )
+    return 0
+
+
+def run_malformed(format_name: str, implementation: str, iterations: i32) -> i32:
+    source = "{\"id\":7,\"name\":\"Ada\",]"
+    if format_name == "cbor":
+        source = serdde_benchmark.repeat_text("a", 1)
+    serdde_benchmark.reset_allocations()
+    start = serdde_benchmark.now_ns()
+    rejected: u64 = 0
+    i: i32 = 0
+    while i < iterations:
+        decoded: Result[SmallRecord, SerddeError]
+        if implementation == "serdde-value":
+            decoded = decode_value[SmallRecord](source, format_name)
+        else:
+            decoded = decode_direct[SmallRecord](source, format_name)
+        if not decoded.ok:
+            rejected += 1
+        i += 1
+    finish = serdde_benchmark.now_ns()
+    allocations = serdde_benchmark.allocation_count()
+    allocated_bytes = serdde_benchmark.allocated_bytes()
+    report(
+        implementation,
+        format_name,
+        "malformed",
+        "decode",
+        iterations,
+        finish - start,
+        len(source),
+        allocations,
+        allocated_bytes,
+        rejected,
+    )
+    if rejected != u64(iterations):
+        return 5
+    return 0
 
 
 def main() -> i32:
-    iterations: i32 = 50000
-    record = BenchRecord(
-        id=7,
-        name="Ada Lovelace",
-        active=True,
-        scores=[2, 3, 5, 7, 11, 13, 17, 19],
-        metadata={"language": "dudu", "format": "json"},
-    )
-
-    encoded = dumps(record)
-    source: str = ""
-    match encoded:
-        case Err(error):
-            print(error.message)
-            return 1
-        case Ok(text):
-            source = text
-
-    bytes: usize = 0
-    start = serdde_benchmark.now_ns()
-    i: i32 = 0
-    while i < iterations:
-        serialize_result = dumps(record)
-        match serialize_result:
-            case Err(error):
-                print(error.message)
-                return 2
-            case Ok(text):
-                bytes += len(text)
-        i += 1
-    serialize_end = serdde_benchmark.now_ns()
-
-    id_sum: u64 = 0
-    i = 0
-    while i < iterations:
-        parse_result = loads[BenchRecord](source)
-        match parse_result:
-            case Err(error):
-                print(error.message)
-                return 3
-            case Ok(value):
-                id_sum += value.id
-        i += 1
-    parse_end = serdde_benchmark.now_ns()
-
-    print("implementation=serdde")
-    print("iterations=" + str(iterations))
-    print("serialize_ms=" + str(elapsed_ms(start, serialize_end)))
-    print("parse_ms=" + str(elapsed_ms(serialize_end, parse_end)))
-    print("bytes=" + str(bytes))
-    print("id_sum=" + str(id_sum))
-    return 0
+    workload = serdde_benchmark.environment("SERDDE_BENCH_WORKLOAD", "small")
+    if workload == "small":
+        small_record = SmallRecord(
+            id=7,
+            name="Ada Lovelace",
+            active=True,
+            scores=[2, 3, 5, 7, 11, 13, 17, 19],
+            metadata={"format": "wire", "language": "dudu"},
+        )
+        return run_case(small_record, workload, 50000)
+    if workload == "nested":
+        nested_record = NestedRecord(
+            child=NestedLevel2(
+                child=NestedLevel3(
+                    child=NestedLevel4(
+                        child=NestedLeaf(value=-123456789, label="deep leaf"),
+                    ),
+                ),
+            ),
+        )
+        return run_case(nested_record, workload, 50000)
+    if workload == "large_string":
+        string_record = StringRecord(
+            payload=serdde_benchmark.repeat_text("Dudu direct wire payload. ", 2622),
+        )
+        return run_case(string_record, workload, 2000)
+    if workload == "large_array":
+        values: list[i64] = []
+        i: i64 = 0
+        while i < 4096:
+            values.append((i * 17) - 2048)
+            i += 1
+        array_record = ArrayRecord(values=values)
+        return run_case(array_record, workload, 2000)
+    if workload == "map":
+        values: dict[str, i64] = {}
+        i: i64 = 0
+        while i < 512:
+            values["key_" + str(i)] = (i * 31) - 7
+            i += 1
+        map_record = MapRecord(values=values)
+        return run_case(map_record, workload, 3000)
+    if workload == "enum":
+        event_record = EventRecord(
+            sequence=99,
+            event=BenchEvent.MouseMove(x=320, y=-180),
+        )
+        return run_case(event_record, workload, 50000)
+    if workload == "malformed":
+        format_name = serdde_benchmark.environment("SERDDE_BENCH_FORMAT", "json")
+        implementation = serdde_benchmark.environment(
+            "SERDDE_BENCH_IMPLEMENTATION",
+            "serdde-direct",
+        )
+        iterations = serdde_benchmark.environment_i32(
+            "SERDDE_BENCH_ITERATIONS",
+            50000,
+        )
+        return run_malformed(format_name, implementation, iterations)
+    print("unknown benchmark workload: " + workload)
+    return 1

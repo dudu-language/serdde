@@ -1,4 +1,4 @@
-name = "serdde-json-benchmark"
+name = "serdde-wire-benchmark"
 entry = "src/main.dd"
 
 [cxx]
@@ -6,6 +6,21 @@ standard = "c++20"
 
 [cc]
 flags = ["-O3", "-DNDEBUG"]
+
+[include]
+paths = ["../../third_party/yyjson"]
+
+[sources]
+cpp = ["src/benchmark_native.cpp"]
+c = ["../../third_party/yyjson/yyjson.c"]
+
+[link]
+flags = [
+    "-Wl,--wrap=malloc",
+    "-Wl,--wrap=calloc",
+    "-Wl,--wrap=realloc",
+    "-Wl,--wrap=free",
+]
 
 [build]
 dir = "build"

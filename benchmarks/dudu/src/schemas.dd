@@ -1,0 +1,68 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class SmallRecord:
+    id: u64
+    name: str
+    active: bool
+    scores: list[i32]
+    metadata: dict[str, str]
+
+
+@derive(Serde)
+class NestedLeaf:
+    value: i64
+    label: str
+
+
+@derive(Serde)
+class NestedLevel4:
+    child: NestedLeaf
+
+
+@derive(Serde)
+class NestedLevel3:
+    child: NestedLevel4
+
+
+@derive(Serde)
+class NestedLevel2:
+    child: NestedLevel3
+
+
+@derive(Serde)
+class NestedRecord:
+    child: NestedLevel2
+
+
+@derive(Serde)
+class StringRecord:
+    payload: str
+
+
+@derive(Serde)
+class ArrayRecord:
+    values: list[i64]
+
+
+@derive(Serde)
+class MapRecord:
+    values: dict[str, i64]
+
+
+@derive(Serde)
+enum BenchEvent:
+    Quit
+    KeyDown:
+        key: i32
+    MouseMove:
+        x: i32
+        y: i32
+
+
+@derive(Serde)
+class EventRecord:
+    sequence: u64
+    event: BenchEvent
+

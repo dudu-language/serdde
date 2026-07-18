@@ -1,0 +1,491 @@
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_config import bool_option
+from serdde.macro_config import path_expression
+from serdde.macro_config import serialized_name
+from serdde.macro_config import string_list_option
+from serdde.macro_config import string_option
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import ok
+from serdde.macro_support import qname
+from serdde.macro_support import result_type
+from serdde.macro_support import self_reference
+import dudu.ast as ast
+
+
+def writer_parameter() -> ast.Parameter:
+    return ast.Parameter(
+        name="output",
+        type=ast.reference_type(ast.named_type("Writer")),
+    )
+
+
+def reader_parameter(name: str) -> ast.Parameter:
+    return ast.Parameter(
+        name=name,
+        type=ast.reference_type(ast.const_type(ast.named_type("Reader"))),
+    )
+
+
+def bool_result() -> ast.TypeRef:
+    return result_type(ast.named_type("bool"))
+
+
+def protocol_call(name: str, arguments: list[ast.Expression]) -> ast.Expression:
+    return call("_serdde_protocol", name, arguments)
+
+
+def failed_result(result: ast.Expression) -> ast.Expression:
+    return ast.unary_expression("not", member(result, "ok"))
+
+
+def return_result_error(result: ast.Expression, field: ast.Expression) -> ast.Statement:
+    error = method(member(result, "err"), "at_field", [field])
+    return ast.return_statement(err(error))
+
+
+def checked_write(
+    expression: ast.Expression,
+    result_name: str,
+    field: ast.Expression,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(result_name, bool_result(), expression))
+    result.append(ast.if_statement(
+        failed_result(ast.name_expression(result_name)),
+        [return_result_error(ast.name_expression(result_name), field)],
+    ))
+    return result
+
+
+def field_default_expression(field: &const[ast.FieldDecl]) -> ast.Expression:
+    if field.value.has_value():
+        return field.value.value()
+    default_with = string_option(field.attributes, "default_with", "")
+    if default_with != "":
+        return ast.call_expression(path_expression(default_with), [])
+    return ast.template_call_expression(
+        ast.member_expression(ast.name_expression("_serdde_convert"), "default_value"),
+        [field.type],
+        [],
+    )
+
+
+def field_has_default(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        field.value.has_value()
+        or bool_option(field.attributes, "default", False)
+        or string_option(field.attributes, "default_with", "") != ""
+    )
+
+
+def skipped_for_encode(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        bool_option(field.attributes, "skip", False)
+        or bool_option(field.attributes, "skip_serializing", False)
+    )
+
+
+def skipped_for_decode(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        bool_option(field.attributes, "skip", False)
+        or bool_option(field.attributes, "skip_deserializing", False)
+    )
+
+
+def has_flattened_field(item: &const[ast.ClassDecl]) -> bool:
+    for field in item.fields:
+        if not skipped_for_encode(field) and bool_option(field.attributes, "flatten", False):
+            return True
+    return False
+
+
+def field_count_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    fixed: usize = 0
+    for field in item.fields:
+        if skipped_for_encode(field):
+            continue
+        if not bool_option(field.attributes, "flatten", False):
+            fixed += 1
+    body.append(ast.variable_statement(
+        "count",
+        ast.named_type("usize"),
+        ast.int_expression(str(fixed)),
+    ))
+    for field in item.fields:
+        if skipped_for_encode(field):
+            continue
+        source = member(ast.name_expression("self"), field.name)
+        if bool_option(field.attributes, "flatten", False):
+            body.append(ast.compound_assignment_statement(
+                ast.name_expression("count"),
+                "+=",
+                method(source, "serdde_field_count", []),
+            ))
+            continue
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if != "":
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(
+                predicate,
+                [ast.compound_assignment_statement(
+                    ast.name_expression("count"),
+                    "-=",
+                    ast.int_expression("1"),
+                )],
+            ))
+    body.append(ast.return_statement(ast.name_expression("count")))
+    return ast.FunctionDecl(
+        name="serdde_field_count",
+        parameters=[self_reference()],
+        return_type=ast.named_type("usize"),
+        body=body,
+    )
+
+
+def encode_one_field(
+    field: &const[ast.FieldDecl],
+    field_name: str,
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    source = member(ast.name_expression("self"), field.name)
+    encoded_name = names.take("encoded")
+    serialized_name_expr = ast.string_expression(field_name)
+    if bool_option(field.attributes, "flatten", False):
+        return checked_write(
+            method(source, "serdde_serialize_fields", [ast.name_expression("output")]),
+            encoded_name,
+            ast.string_expression(field.name),
+        )
+    result: list[ast.Statement] = []
+    field_result = names.take("field")
+    for statement in checked_write(
+        protocol_call(
+            "write_ok",
+            [
+                ast.name_expression("output"),
+                method(
+                    ast.name_expression("output"),
+                    "write_field",
+                    [serialized_name_expr],
+                ),
+            ],
+        ),
+        field_result,
+        serialized_name_expr,
+    ):
+        result.append(statement)
+    adapter = string_option(field.attributes, "adapter", "")
+    expression = ast.Expression()
+    if adapter == "":
+        expression = protocol_call(
+            "serialize_to",
+            [source, ast.name_expression("output")],
+        )
+    else:
+        expression = ast.template_call_expression(
+            member(path_expression(adapter), "serialize"),
+            [ast.named_type("Writer")],
+            [source, ast.name_expression("output")],
+        )
+    for statement in checked_write(expression, encoded_name, serialized_name_expr):
+        result.append(statement)
+    return result
+
+
+def encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    names = GeneratedNames()
+    rename_all = string_option(item.attributes, "rename_all", "")
+    for field in item.fields:
+        if skipped_for_encode(field):
+            continue
+        field_name = serialized_name(field.name, field.attributes, rename_all)
+        field_body = encode_one_field(field, field_name, names)
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if == "":
+            for statement in field_body:
+                body.append(statement)
+        else:
+            source = member(ast.name_expression("self"), field.name)
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
+    body.append(ast.return_statement(ok(ast.bool_expression(True))))
+    return ast.FunctionDecl(
+        name="serdde_serialize_fields",
+        generic_parameters=[ast.generic_parameter("Writer")],
+        parameters=[self_reference(), writer_parameter()],
+        return_type=bool_result(),
+        body=body,
+    )
+
+
+def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    begin_method = "begin_object"
+    if has_flattened_field(item):
+        begin_method = "begin_object_checked"
+    started = protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(
+                ast.name_expression("output"),
+                begin_method,
+                [method(ast.name_expression("self"), "serdde_field_count", [])],
+            ),
+        ],
+    )
+    body.append(ast.variable_statement("started", bool_result(), started))
+    body.append(ast.if_statement(
+        failed_result(ast.name_expression("started")),
+        [ast.return_statement(ast.name_expression("started"))],
+    ))
+    body.append(ast.variable_statement(
+        "fields",
+        bool_result(),
+        method(
+            ast.name_expression("self"),
+            "serdde_serialize_fields",
+            [ast.name_expression("output")],
+        ),
+    ))
+    body.append(ast.if_statement(
+        failed_result(ast.name_expression("fields")),
+        [ast.return_statement(ast.name_expression("fields"))],
+    ))
+    body.append(ast.return_statement(protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(ast.name_expression("output"), "end_object", []),
+        ],
+    )))
+    return ast.FunctionDecl(
+        name="serdde_serialize",
+        generic_parameters=[ast.generic_parameter("Writer")],
+        parameters=[self_reference(), writer_parameter()],
+        return_type=bool_result(),
+        body=body,
+    )
+
+
+def decode_expression(
+    field: &const[ast.FieldDecl],
+    input: ast.Expression,
+) -> ast.Expression:
+    adapter = string_option(field.attributes, "adapter", "")
+    if adapter != "":
+        return ast.template_call_expression(
+            member(path_expression(adapter), "deserialize"),
+            [ast.named_type("Reader")],
+            [input],
+        )
+    return ast.template_call_expression(
+        qname("_serdde_protocol", "deserialize_from"),
+        [field.type, ast.named_type("Reader")],
+        [input],
+    )
+
+
+def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    names = GeneratedNames()
+    for field in item.fields:
+        names.reserve(field.name)
+    input_name = names.take("input")
+    input = ast.name_expression(input_name)
+    body.append(ast.if_statement(
+        ast.unary_expression("not", method(input, "is_object", [])),
+        [ast.return_statement(err(protocol_call(
+            "reader_error",
+            [input, ast.string_expression("expected object")],
+        )))],
+    ))
+    rename_all = string_option(item.attributes, "rename_all", "")
+    accepted: list[str] = []
+    constructor_arguments: list[ast.Expression] = []
+    for field in item.fields:
+        field_name = serialized_name(field.name, field.attributes, rename_all)
+        aliases = string_list_option(field.attributes, "alias")
+        accepted.append(field_name)
+        for alias in aliases:
+            accepted.append(alias)
+        if skipped_for_decode(field):
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                field_default_expression(field),
+            ))
+            continue
+        if bool_option(field.attributes, "flatten", False):
+            ready = names.take("decoded")
+            body.append(ast.variable_statement(
+                ready,
+                result_type(field.type),
+                decode_expression(field, input),
+            ))
+            body.append(ast.if_statement(
+                failed_result(ast.name_expression(ready)),
+                [return_result_error(
+                    ast.name_expression(ready),
+                    ast.string_expression(field.name),
+                )],
+            ))
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                member(ast.name_expression(ready), "value"),
+            ))
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                ast.name_expression(field.name),
+            ))
+            continue
+        selected = names.take("field_name")
+        present = names.take("field_present")
+        body.append(ast.variable_statement(
+            selected,
+            ast.named_type("str"),
+            ast.string_expression(field_name),
+        ))
+        body.append(ast.variable_statement(
+            present,
+            ast.named_type("bool"),
+            ast.bool_expression(False),
+        ))
+        candidates: list[str] = [field_name]
+        for alias in aliases:
+            candidates.append(alias)
+        for candidate in candidates:
+            duplicate = ast.if_statement(
+                ast.name_expression(present),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "duplicate_field_error",
+                    [ast.string_expression(candidate)],
+                )))],
+            )
+            body.append(ast.if_statement(
+                method(input, "has_field", [ast.string_expression(candidate)]),
+                [
+                    duplicate,
+                    ast.assignment_statement(
+                        ast.name_expression(selected),
+                        ast.string_expression(candidate),
+                    ),
+                    ast.assignment_statement(
+                        ast.name_expression(present),
+                        ast.bool_expression(True),
+                    ),
+                ],
+            ))
+        if field_has_default(field):
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                field_default_expression(field),
+            ))
+            decoded = names.take("decoded")
+            decode_body: list[ast.Statement] = [ast.variable_statement(
+                decoded,
+                result_type(field.type),
+                decode_expression(field, method(input, "field", [ast.name_expression(selected)])),
+            )]
+            decode_body.append(ast.if_statement(
+                failed_result(ast.name_expression(decoded)),
+                [return_result_error(
+                    ast.name_expression(decoded),
+                    ast.name_expression(selected),
+                )],
+            ))
+            decode_body.append(ast.assignment_statement(
+                ast.name_expression(field.name),
+                member(ast.name_expression(decoded), "value"),
+            ))
+            body.append(ast.if_statement(ast.name_expression(present), decode_body))
+        else:
+            body.append(ast.if_statement(
+                ast.unary_expression("not", ast.name_expression(present)),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "missing_field_error",
+                    [ast.string_expression(field_name)],
+                )))],
+            ))
+            decoded = names.take("decoded")
+            body.append(ast.variable_statement(
+                decoded,
+                result_type(field.type),
+                decode_expression(field, method(input, "field", [ast.name_expression(selected)])),
+            ))
+            body.append(ast.if_statement(
+                failed_result(ast.name_expression(decoded)),
+                [return_result_error(
+                    ast.name_expression(decoded),
+                    ast.name_expression(selected),
+                )],
+            ))
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                member(ast.name_expression(decoded), "value"),
+            ))
+        constructor_arguments.append(ast.named_argument_expression(
+            field.name,
+            ast.name_expression(field.name),
+        ))
+    if bool_option(item.attributes, "deny_unknown_fields", False):
+        index = names.take("index")
+        key = names.take("key")
+        body.append(ast.variable_statement(index, ast.named_type("usize"), ast.int_expression("0")))
+        comparisons: list[ast.Expression] = []
+        for name in accepted:
+            comparisons.append(ast.binary_expression(
+                ast.name_expression(key),
+                "!=",
+                ast.string_expression(name),
+            ))
+        unknown = ast.bool_expression(True)
+        for comparison in comparisons:
+            unknown = ast.binary_expression(unknown, "and", comparison)
+        loop_body: list[ast.Statement] = [ast.variable_statement(
+            key,
+            ast.named_type("str"),
+            method(input, "key", [ast.name_expression(index)]),
+        )]
+        loop_body.append(ast.if_statement(
+            unknown,
+            [ast.return_statement(err(call(
+                "_serdde_error",
+                "unknown_field_error",
+                [ast.name_expression(key)],
+            )))],
+        ))
+        loop_body.append(ast.compound_assignment_statement(
+            ast.name_expression(index),
+            "+=",
+            ast.int_expression("1"),
+        ))
+        body.append(ast.while_statement(
+            ast.binary_expression(
+                ast.name_expression(index),
+                "<",
+                method(input, "size", []),
+            ),
+            loop_body,
+        ))
+    body.append(ast.return_statement(ok(ast.call_expression(
+        ast.name_expression("Self"),
+        constructor_arguments,
+    ))))
+    return ast.FunctionDecl(
+        name="serdde_deserialize",
+        generic_parameters=[ast.generic_parameter("Reader")],
+        parameters=[reader_parameter(input_name)],
+        return_type=result_type(ast.named_type("Self")),
+        body=body,
+        is_static=True,
+    )

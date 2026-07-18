@@ -1,55 +1,58 @@
 from cpp import string
 from cpp import utility
-from serdde.convert import decode_i32
-from serdde.convert import decode_str
 from serdde.convert import from_value
 from serdde.convert import from_value_with
 from serdde.convert import to_value
 from serdde.convert import to_value_with
 from serdde.error import SerddeError
-from serdde.error import missing_field_error
-from serdde.error import type_error
+from serdde.json import dumps
+from serdde.json import loads
 from serdde.macros import Serde
+from serdde.protocol import deserialize_from
+from serdde.protocol import reader_error
+from serdde.protocol import serialize_to
+from serdde.protocol import write_ok
 from serdde.value import Value
-from serdde.value import ValueKind
-from serdde.value import empty_object_value
-from serdde.value import i64_value
-from serdde.value import string_value
 
 
 class PairSerde:
-    def serialize(
+    def serialize[Writer](
         value: &const[std.pair[std.string, i32]],
-    ) -> Result[Value, SerddeError]:
-        output = empty_object_value()
-        output.set_field("name", string_value(value.first))
-        output.set_field("score", i64_value(i64(value.second)))
-        return Ok(output)
+        output: &Writer,
+    ) -> Result[bool, SerddeError]:
+        started = write_ok(output, output.begin_object(2))
+        if not started.ok:
+            return started
+        name_field = write_ok(output, output.write_field("name"))
+        if not name_field.ok:
+            return name_field
+        name = serialize_to(value.first, output)
+        if not name.ok:
+            return Err(name.err.at_field("name"))
+        score_field = write_ok(output, output.write_field("score"))
+        if not score_field.ok:
+            return score_field
+        score = serialize_to(value.second, output)
+        if not score.ok:
+            return Err(score.err.at_field("score"))
+        return write_ok(output, output.end_object())
 
-    def deserialize(
-        value: &const[Value],
+    def deserialize[Reader](
+        input: &const[Reader],
     ) -> Result[std.pair[std.string, i32], SerddeError]:
-        if value.kind != ValueKind.Object:
-            return Err(type_error("expected pair object"))
-        if not value.has_field("name"):
-            return Err(missing_field_error("name"))
-        if not value.has_field("score"):
-            return Err(missing_field_error("score"))
-        name_result = decode_str(value.field("name"))
-        name: str = ""
-        match name_result:
-            case Err(error):
-                return Err(error.at_field("name"))
-            case Ok(ready):
-                name = ready
-        score_result = decode_i32(value.field("score"))
-        score: i32 = 0
-        match score_result:
-            case Err(error):
-                return Err(error.at_field("score"))
-            case Ok(ready):
-                score = ready
-        return Ok(std.make_pair(std.string(name), score))
+        if not input.is_object():
+            return Err(reader_error(input, "expected pair object"))
+        if not input.has_field("name"):
+            return Err(reader_error(input, "missing pair name").at_field("name"))
+        if not input.has_field("score"):
+            return Err(reader_error(input, "missing pair score").at_field("score"))
+        name = deserialize_from[str, Reader](input.field("name"))
+        if not name.ok:
+            return Err(name.err.at_field("name"))
+        score = deserialize_from[i32, Reader](input.field("score"))
+        if not score.ok:
+            return Err(score.err.at_field("score"))
+        return Ok(std.make_pair(std.string(name.value), score.value))
 
 
 @derive(Serde)
@@ -111,4 +114,24 @@ def main() -> i32:
                         case NativeEvent.Pair(entry):
                             if entry.first != "Ada" or entry.second != 42:
                                 return 9
+
+    json = dumps(envelope)
+    if not json.ok or json.value != "{\"id\":7,\"entry\":{\"name\":\"Ada\",\"score\":42}}":
+        return 10
+    json_envelope = loads[NativeEnvelope](json.value)
+    if not json_envelope.ok:
+        return 11
+    if json_envelope.value.entry.first != "Ada" or json_envelope.value.entry.second != 42:
+        return 12
+
+    event_json = dumps(event)
+    if not event_json.ok or event_json.value != "{\"Pair\":{\"entry\":{\"name\":\"Ada\",\"score\":42}}}":
+        return 13
+    json_event = loads[NativeEvent](event_json.value)
+    if not json_event.ok:
+        return 14
+    match json_event.value:
+        case NativeEvent.Pair(entry):
+            if entry.first != "Ada" or entry.second != 42:
+                return 15
     return 0

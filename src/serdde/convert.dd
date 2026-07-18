@@ -1,5 +1,7 @@
 from serdde.error import SerddeError
 from serdde.error import type_error
+from serdde.protocol import deserialize_from
+from serdde.protocol import serialize_to
 from serdde.value import Value
 from serdde.value import ValueKind
 from serdde.value import bool_value
@@ -10,6 +12,8 @@ from serdde.value import null_value
 from serdde.value import sequence_value
 from serdde.value import string_value
 from serdde.value import u64_value
+from serdde.value_backend import ValueReader
+from serdde.value_backend import ValueWriter
 
 
 def dict_keys[T](values: &const[dict[str, T]]) -> list[str]:
@@ -341,7 +345,11 @@ def to_value[T, E](value: &const[Result[T, E]]) -> Result[Value, SerddeError]:
 
 
 def to_value[T](value: &const[T]) -> Result[Value, SerddeError]:
-    return value.serdde_serialize()
+    output = ValueWriter()
+    encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err)
+    return Ok(output.root)
 
 
 class DecodeTarget[T]:
@@ -497,12 +505,18 @@ def decode_as[T](value: &const[Value], target: DecodeTarget[T]) -> Result[T, Ser
 
 
 def from_value[T](value: &const[Value]) -> Result[T, SerddeError]:
-    return decode_as(value, DecodeTarget[T]())
+    input = ValueReader(value=value)
+    return deserialize_from[T, ValueReader](input)
 
 
 def to_value_with[T, Adapter](value: &const[T]) -> Result[Value, SerddeError]:
-    return Adapter.serialize(value)
+    output = ValueWriter()
+    encoded: Result[bool, SerddeError] = Adapter.serialize[ValueWriter](value, output)
+    if not encoded.ok:
+        return Err(encoded.err)
+    return Ok(output.root)
 
 
 def from_value_with[T, Adapter](value: &const[Value]) -> Result[T, SerddeError]:
-    return Adapter.deserialize(value)
+    input = ValueReader(value=value)
+    return Adapter.deserialize[ValueReader](input)

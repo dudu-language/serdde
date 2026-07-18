@@ -7,6 +7,12 @@ standard = "c++20"
 [build]
 dir = "build"
 
+[include]
+paths = ["third_party/yyjson"]
+
+[sources]
+c = ["third_party/yyjson/yyjson.c"]
+
 [targets.tests]
 entry = "src/test_main.dd"
 kind = "executable"
@@ -45,4 +51,8 @@ kind = "executable"
 
 [targets.adapters]
 entry = "tests/adapter_main.dd"
+kind = "executable"
+
+[targets.protocol_probe]
+entry = "tests/direct_protocol_probe.dd"
 kind = "executable"

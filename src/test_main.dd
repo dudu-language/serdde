@@ -10,6 +10,11 @@ from serdde.error import SerddeError
 from serdde.error import type_error
 from serdde.json import dumps_value
 from serdde.json import loads
+from serdde.protocol import DecodeTarget
+from serdde.protocol import deserialize_as
+from serdde.protocol import reader_error
+from serdde.protocol import serialize_to
+from serdde.protocol import write_ok
 from serdde.value import Value
 from serdde.value import ValueKind
 from serdde.value import empty_object_value
@@ -18,23 +23,32 @@ from serdde.value import empty_object_value
 class CodecProbe:
     value: i32
 
-    def serdde_serialize(self: &const[Self]) -> Result[Value, SerddeError]:
-        result = empty_object_value()
-        result.set_field("value", encode_i32(self.value))
-        return Ok(result)
+    def serdde_serialize[Writer](
+        self: &const[Self],
+        output: &Writer,
+    ) -> Result[bool, SerddeError]:
+        started = write_ok(output, output.begin_object(1))
+        if not started.ok:
+            return started
+        field = write_ok(output, output.write_field("value"))
+        if not field.ok:
+            return field
+        encoded = serialize_to(self.value, output)
+        if not encoded.ok:
+            return Err(encoded.err.at_field("value"))
+        return write_ok(output, output.end_object())
 
-    def serdde_deserialize(value: &const[Value]) -> Result[CodecProbe, SerddeError]:
-        if value.kind != ValueKind.Object:
-            return Err(type_error("expected object"))
-        if not value.has_field("value"):
+    def serdde_deserialize[Reader](
+        input: &const[Reader],
+    ) -> Result[CodecProbe, SerddeError]:
+        if not input.is_object():
+            return Err(reader_error(input, "expected object"))
+        if not input.has_field("value"):
             return Err(SerddeError(kind=ErrorKind.MissingField, message="missing value"))
-        field = value.field("value")
-        decoded = decode_i32(field)
-        match decoded:
-            case Err(error):
-                return Err(error.at_field("value"))
-            case Ok(number):
-                return Ok(CodecProbe(number))
+        decoded = deserialize_as(input.field("value"), DecodeTarget[i32]())
+        if not decoded.ok:
+            return Err(decoded.err.at_field("value"))
+        return Ok(CodecProbe(decoded.value))
 
 
 def expect_roundtrip(source: str) -> i32:

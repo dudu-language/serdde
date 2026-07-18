@@ -1,0 +1,196 @@
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import bool_value
+from serdde.value import empty_object_value
+from serdde.value import f64_value
+from serdde.value import i64_value
+from serdde.value import null_value
+from serdde.value import sequence_value
+from serdde.value import string_value
+from serdde.value import u64_value
+
+
+class ValueWriter:
+    root: Value = Value()
+    stack: list[Value] = []
+    fields: list[str] = []
+    checked_objects: list[bool] = []
+    failed: bool = False
+    message: str = ""
+
+    def format_name(self: &const[Self]) -> str:
+        return "value"
+
+    def error_message(self: &const[Self]) -> str:
+        return self.message
+
+    def attach(self, value: Value) -> bool:
+        if len(self.stack) == 0:
+            self.root = value
+            return True
+        index = len(self.stack) - 1
+        parent = self.stack[index]
+        if parent.kind == ValueKind.Sequence:
+            parent.sequence_value.append(value)
+            self.stack[index] = parent
+            return True
+        if parent.kind == ValueKind.Object:
+            name = self.fields[index]
+            if name == "":
+                self.failed = True
+                self.message = "object value was written without a field name"
+                return False
+            if self.checked_objects[index] and parent.has_field(name):
+                self.failed = True
+                self.message = "duplicate object field: " + name
+                return False
+            parent.set_field(name, value)
+            self.stack[index] = parent
+            self.fields[index] = ""
+            return True
+        self.failed = True
+        self.message = "value writer has an invalid container"
+        return False
+
+    def write_null(self) -> bool:
+        return self.attach(null_value())
+
+    def write_bool(self, value: bool) -> bool:
+        return self.attach(bool_value(value))
+
+    def write_i64(self, value: i64) -> bool:
+        return self.attach(i64_value(value))
+
+    def write_u64(self, value: u64) -> bool:
+        return self.attach(u64_value(value))
+
+    def write_f64(self, value: f64) -> bool:
+        return self.attach(f64_value(value))
+
+    def write_string(self, value: str) -> bool:
+        return self.attach(string_value(value))
+
+    def begin_sequence(self, size: usize) -> bool:
+        self.stack.append(sequence_value([]))
+        self.fields.append("")
+        self.checked_objects.append(False)
+        return True
+
+    def begin_object(self, size: usize) -> bool:
+        self.stack.append(empty_object_value())
+        self.fields.append("")
+        self.checked_objects.append(False)
+        return True
+
+    def begin_object_checked(self, size: usize) -> bool:
+        self.stack.append(empty_object_value())
+        self.fields.append("")
+        self.checked_objects.append(True)
+        return True
+
+    def write_field(self, name: str) -> bool:
+        if len(self.stack) == 0 or self.stack.back().kind != ValueKind.Object:
+            self.failed = True
+            self.message = "field name was written outside an object"
+            return False
+        index = len(self.fields) - 1
+        if self.fields[index] != "":
+            self.failed = True
+            self.message = "object field is missing its value"
+            return False
+        self.fields[index] = name
+        return True
+
+    def end_container(self) -> bool:
+        if len(self.stack) == 0:
+            self.failed = True
+            self.message = "container stack is empty"
+            return False
+        value = self.stack.back()
+        self.stack.pop_back()
+        self.fields.pop_back()
+        self.checked_objects.pop_back()
+        return self.attach(value)
+
+    def end_sequence(self) -> bool:
+        return self.end_container()
+
+    def end_object(self) -> bool:
+        return self.end_container()
+
+
+class ValueReader:
+    value: &const[Value]
+
+    def format_name(self: &const[Self]) -> str:
+        return "value"
+
+    def line(self: &const[Self]) -> usize:
+        return self.value.line
+
+    def column(self: &const[Self]) -> usize:
+        return self.value.column
+
+    def offset(self: &const[Self]) -> usize:
+        return self.value.offset
+
+    def is_null(self: &const[Self]) -> bool:
+        return self.value.kind == ValueKind.Null
+
+    def is_sequence(self: &const[Self]) -> bool:
+        return self.value.kind == ValueKind.Sequence
+
+    def is_object(self: &const[Self]) -> bool:
+        return self.value.kind == ValueKind.Object
+
+    def get_bool(self: &const[Self], output: &bool) -> bool:
+        if self.value.kind != ValueKind.Bool:
+            return False
+        output = self.value.bool_value
+        return True
+
+    def get_i64(self: &const[Self], output: &i64) -> bool:
+        if self.value.kind != ValueKind.I64:
+            return False
+        output = self.value.i64_value
+        return True
+
+    def get_u64(self: &const[Self], output: &u64) -> bool:
+        if self.value.kind != ValueKind.U64:
+            return False
+        output = self.value.u64_value
+        return True
+
+    def get_f64(self: &const[Self], output: &f64) -> bool:
+        if self.value.kind != ValueKind.F64:
+            return False
+        output = self.value.f64_value
+        return True
+
+    def get_string(self: &const[Self], output: &str) -> bool:
+        if self.value.kind != ValueKind.String:
+            return False
+        output = self.value.string_value
+        return True
+
+    def size(self: &const[Self]) -> usize:
+        if self.value.kind == ValueKind.Sequence:
+            return len(self.value.sequence_value)
+        if self.value.kind == ValueKind.Object:
+            return len(self.value.object_order)
+        return 0
+
+    def key(self: &const[Self], index: usize) -> str:
+        return self.value.object_order[index]
+
+    def element(self: &const[Self], index: usize) -> ValueReader:
+        if self.value.kind == ValueKind.Sequence:
+            return ValueReader(value=self.value.sequence_value[index])
+        name = self.value.object_order[index]
+        return ValueReader(value=self.value.field(name))
+
+    def has_field(self: &const[Self], name: str) -> bool:
+        return self.value.kind == ValueKind.Object and self.value.has_field(name)
+
+    def field(self: &const[Self], name: str) -> ValueReader:
+        return ValueReader(value=self.value.field(name))

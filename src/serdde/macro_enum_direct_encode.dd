@@ -1,0 +1,362 @@
+from serdde.macro_class_direct import bool_result
+from serdde.macro_class_direct import checked_write
+from serdde.macro_class_direct import failed_result
+from serdde.macro_class_direct import protocol_call
+from serdde.macro_class_direct import writer_parameter
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_config import bool_option
+from serdde.macro_config import path_expression
+from serdde.macro_config import serialized_name
+from serdde.macro_config import string_option
+from serdde.macro_enum_support import append_statements
+from serdde.macro_enum_support import enum_name
+from serdde.macro_enum_support import generated_names_for_variant
+from serdde.macro_enum_support import invalid_enum
+from serdde.macro_enum_support import variant_pattern
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import ok
+from serdde.macro_support import self_reference
+import dudu.ast as ast
+
+
+def skipped_for_encode(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        bool_option(field.attributes, "skip", False)
+        or bool_option(field.attributes, "skip_serializing", False)
+    )
+
+
+def payload_count_statements(
+    variant: &const[ast.EnumVariant],
+    count_name: str,
+) -> list[ast.Statement]:
+    fixed: usize = 0
+    body: list[ast.Statement] = []
+    for field in variant.fields:
+        if skipped_for_encode(field):
+            continue
+        if not bool_option(field.attributes, "flatten", False):
+            fixed += 1
+    body.append(ast.variable_statement(
+        count_name,
+        ast.named_type("usize"),
+        ast.int_expression(str(fixed)),
+    ))
+    for field in variant.fields:
+        if skipped_for_encode(field):
+            continue
+        source = ast.name_expression(field.name)
+        if bool_option(field.attributes, "flatten", False):
+            body.append(ast.compound_assignment_statement(
+                ast.name_expression(count_name),
+                "+=",
+                method(source, "serdde_field_count", []),
+            ))
+            continue
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if != "":
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(
+                predicate,
+                [ast.compound_assignment_statement(
+                    ast.name_expression(count_name),
+                    "-=",
+                    ast.int_expression("1"),
+                )],
+            ))
+    return body
+
+
+def payload_field_statements(
+    field: &const[ast.FieldDecl],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    source = ast.name_expression(field.name)
+    encoded_name = names.take("encoded")
+    field_name = serialized_name(field.name, field.attributes, "")
+    field_name_expr = ast.string_expression(field_name)
+    if bool_option(field.attributes, "flatten", False):
+        return checked_write(
+            method(source, "serdde_serialize_fields", [ast.name_expression("output")]),
+            encoded_name,
+            ast.string_expression(field.name),
+        )
+
+    body: list[ast.Statement] = []
+    field_result = names.take("field")
+    append_statements(body, checked_write(
+        protocol_call(
+            "write_ok",
+            [
+                ast.name_expression("output"),
+                method(
+                    ast.name_expression("output"),
+                    "write_field",
+                    [field_name_expr],
+                ),
+            ],
+        ),
+        field_result,
+        field_name_expr,
+    ))
+    adapter = string_option(field.attributes, "adapter", "")
+    encoded = ast.Expression()
+    if adapter == "":
+        encoded = protocol_call(
+            "serialize_to",
+            [source, ast.name_expression("output")],
+        )
+    else:
+        encoded = ast.template_call_expression(
+            member(path_expression(adapter), "serialize"),
+            [ast.named_type("Writer")],
+            [source, ast.name_expression("output")],
+        )
+    append_statements(body, checked_write(encoded, encoded_name, field_name_expr))
+    return body
+
+
+def payload_statements(
+    variant: &const[ast.EnumVariant],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    for field in variant.fields:
+        if skipped_for_encode(field):
+            continue
+        field_body = payload_field_statements(field, names)
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if == "":
+            append_statements(body, field_body)
+        else:
+            source = ast.name_expression(field.name)
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
+    return body
+
+
+def checked_protocol_write(
+    body: &list[ast.Statement],
+    expression: ast.Expression,
+    name: str,
+):
+    body.append(ast.variable_statement(name, bool_result(), expression))
+    body.append(ast.if_statement(
+        failed_result(ast.name_expression(name)),
+        [ast.return_statement(ast.name_expression(name))],
+    ))
+
+
+def begin_object(
+    body: &list[ast.Statement],
+    count: ast.Expression,
+    name: str,
+):
+    checked_protocol_write(body, protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(ast.name_expression("output"), "begin_object", [count]),
+        ],
+    ), name)
+
+
+def write_field_and_string(
+    body: &list[ast.Statement],
+    field: str,
+    value: str,
+    names: &GeneratedNames,
+):
+    field_name = names.take("field")
+    checked_protocol_write(body, protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(
+                ast.name_expression("output"),
+                "write_field",
+                [ast.string_expression(field)],
+            ),
+        ],
+    ), field_name)
+    value_name = names.take("tag")
+    checked_protocol_write(body, protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(
+                ast.name_expression("output"),
+                "write_string",
+                [ast.string_expression(value)],
+            ),
+        ],
+    ), value_name)
+
+
+def end_object(body: &list[ast.Statement]):
+    body.append(ast.return_statement(protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(ast.name_expression("output"), "end_object", []),
+        ],
+    )))
+
+
+def write_payload_object(
+    body: &list[ast.Statement],
+    variant: &const[ast.EnumVariant],
+    names: &GeneratedNames,
+):
+    count_name = names.take("payload_count")
+    append_statements(body, payload_count_statements(variant, count_name))
+    begin_object(body, ast.name_expression(count_name), names.take("payload_started"))
+    append_statements(body, payload_statements(variant, names))
+    checked_protocol_write(body, protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(ast.name_expression("output"), "end_object", []),
+        ],
+    ), names.take("payload_ended"))
+
+
+def external_body(
+    variant: &const[ast.EnumVariant],
+    serialized: str,
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    if len(variant.fields) == 0:
+        body.append(ast.return_statement(protocol_call(
+            "write_ok",
+            [
+                ast.name_expression("output"),
+                method(
+                    ast.name_expression("output"),
+                    "write_string",
+                    [ast.string_expression(serialized)],
+                ),
+            ],
+        )))
+        return body
+    begin_object(body, ast.int_expression("1"), names.take("outer_started"))
+    checked_protocol_write(body, protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(
+                ast.name_expression("output"),
+                "write_field",
+                [ast.string_expression(serialized)],
+            ),
+        ],
+    ), names.take("variant_field"))
+    write_payload_object(body, variant, names)
+    end_object(body)
+    return body
+
+
+def internal_body(
+    variant: &const[ast.EnumVariant],
+    serialized: str,
+    tag: str,
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    count_name = names.take("payload_count")
+    append_statements(body, payload_count_statements(variant, count_name))
+    begin_object(
+        body,
+        ast.binary_expression(ast.name_expression(count_name), "+", ast.int_expression("1")),
+        names.take("outer_started"),
+    )
+    write_field_and_string(body, tag, serialized, names)
+    append_statements(body, payload_statements(variant, names))
+    end_object(body)
+    return body
+
+
+def adjacent_body(
+    variant: &const[ast.EnumVariant],
+    serialized: str,
+    tag: str,
+    content: str,
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    count = "1"
+    if len(variant.fields) > 0:
+        count = "2"
+    begin_object(body, ast.int_expression(count), names.take("outer_started"))
+    write_field_and_string(body, tag, serialized, names)
+    if len(variant.fields) > 0:
+        checked_protocol_write(body, protocol_call(
+            "write_ok",
+            [
+                ast.name_expression("output"),
+                method(
+                    ast.name_expression("output"),
+                    "write_field",
+                    [ast.string_expression(content)],
+                ),
+            ],
+        ), names.take("content_field"))
+        write_payload_object(body, variant, names)
+    end_object(body)
+    return body
+
+
+def untagged_body(
+    variant: &const[ast.EnumVariant],
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    if len(variant.fields) == 0:
+        body.append(ast.return_statement(protocol_call(
+            "write_ok",
+            [
+                ast.name_expression("output"),
+                method(ast.name_expression("output"), "write_null", []),
+            ],
+        )))
+        return body
+    write_payload_object(body, variant, names)
+    body.append(ast.return_statement(ok(ast.bool_expression(True))))
+    return body
+
+
+def enum_encode_method(item: &const[ast.EnumDecl]) -> ast.FunctionDecl:
+    cases: list[ast.Statement] = []
+    tag = string_option(item.attributes, "tag", "")
+    content = string_option(item.attributes, "content", "")
+    untagged = bool_option(item.attributes, "untagged", False)
+    for variant in item.variants:
+        case_body: list[ast.Statement] = []
+        if (
+            bool_option(variant.attributes, "skip", False)
+            or bool_option(variant.attributes, "skip_serializing", False)
+        ):
+            case_body.append(ast.return_statement(invalid_enum(
+                "enum variant is skipped during serialization: " + variant.name,
+            )))
+        else:
+            names = generated_names_for_variant(variant)
+            serialized = enum_name(item, variant)
+            if untagged:
+                case_body = untagged_body(variant, names)
+            elif tag == "":
+                case_body = external_body(variant, serialized, names)
+            elif content == "":
+                case_body = internal_body(variant, serialized, tag, names)
+            else:
+                case_body = adjacent_body(variant, serialized, tag, content, names)
+        cases.append(ast.unguarded_case_statement(variant_pattern(item, variant), case_body))
+    return ast.FunctionDecl(
+        name="serdde_serialize",
+        generic_parameters=[ast.generic_parameter("Writer")],
+        parameters=[self_reference(), writer_parameter()],
+        return_type=bool_result(),
+        body=[ast.match_statement(ast.name_expression("self"), cases)],
+    )

@@ -1,0 +1,557 @@
+from cpp import variant
+from cpp.path import variant_wire_native.hpp
+from serdde.error import SerddeError
+from serdde.error import type_error
+
+
+class DecodeTarget[T]:
+    marker: bool = False
+
+
+class VariantSerializer[Writer]:
+    output: &Writer
+
+    @operator("()")
+    def serialize[T](self, value: &const[T]) -> Result[bool, SerddeError]:
+        return serialize_to(value, self.output)
+
+
+class VariantDeserializer[Reader]:
+    input: &const[Reader]
+    error: SerddeError
+
+    @operator("()")
+    def deserialize[T](self) -> Option[T]:
+        decoded = deserialize_as(self.input, DecodeTarget[T]())
+        if not decoded.ok:
+            self.error = decoded.err
+            return None
+        return decoded.value
+
+
+def writer_error[Writer](output: &const[Writer]) -> SerddeError:
+    return type_error(output.error_message()).with_format(output.format_name())
+
+
+def reader_error[Reader](input: &const[Reader], message: str) -> SerddeError:
+    return type_error(message).with_format(input.format_name()).with_source(
+        input.line(),
+        input.column(),
+        input.offset(),
+    )
+
+
+def write_ok[Writer](output: &const[Writer], success: bool) -> Result[bool, SerddeError]:
+    if not success:
+        return Err(writer_error(output))
+    return Ok(True)
+
+
+def serialize_to[Writer](value: &const[bool], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_bool(value))
+
+
+def serialize_to[Writer](value: &const[char], output: &Writer) -> Result[bool, SerddeError]:
+    text: str = ""
+    text += value
+    return write_ok(output, output.write_string(text))
+
+
+def serialize_to[Writer](value: &const[i8], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_i64(i64(value)))
+
+
+def serialize_to[Writer](value: &const[i16], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_i64(i64(value)))
+
+
+def serialize_to[Writer](value: &const[i32], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_i64(i64(value)))
+
+
+def serialize_to[Writer](value: &const[i64], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_i64(value))
+
+
+def serialize_to[Writer](value: &const[u8], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_u64(u64(value)))
+
+
+def serialize_to[Writer](value: &const[u16], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_u64(u64(value)))
+
+
+def serialize_to[Writer](value: &const[u32], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_u64(u64(value)))
+
+
+def serialize_to[Writer](value: &const[u64], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_u64(value))
+
+
+def serialize_to[Writer](value: &const[f32], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_f64(f64(value)))
+
+
+def serialize_to[Writer](value: &const[f64], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_f64(value))
+
+
+def serialize_to[Writer](value: &const[str], output: &Writer) -> Result[bool, SerddeError]:
+    return write_ok(output, output.write_string(value))
+
+
+def serialize_to[Writer, T](
+    value: &const[list[T]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    started = write_ok(output, output.begin_sequence(len(value)))
+    if not started.ok:
+        return started
+    index: usize = 0
+    for item in value:
+        encoded = serialize_to(item, output)
+        if not encoded.ok:
+            return Err(encoded.err.at_index(index))
+        index += 1
+    return write_ok(output, output.end_sequence())
+
+
+def serialize_to[Writer, T, N](
+    value: &const[array[T][N]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    started = write_ok(output, output.begin_sequence(len(value)))
+    if not started.ok:
+        return started
+    index: usize = 0
+    for item in value:
+        encoded = serialize_to(item, output)
+        if not encoded.ok:
+            return Err(encoded.err.at_index(index))
+        index += 1
+    return write_ok(output, output.end_sequence())
+
+
+def serialize_to[Writer, T](
+    value: &const[set[T]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    started = write_ok(output, output.begin_sequence(len(value)))
+    if not started.ok:
+        return started
+    index: usize = 0
+    for item in value:
+        encoded = serialize_to(item, output)
+        if not encoded.ok:
+            return Err(encoded.err.at_index(index))
+        index += 1
+    return write_ok(output, output.end_sequence())
+
+
+def serialize_to[Writer, T](
+    value: &const[dict[str, T]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    started = write_ok(output, output.begin_object(len(value)))
+    if not started.ok:
+        return started
+    for key in value:
+        field = write_ok(output, output.write_field(key))
+        if not field.ok:
+            return field
+        encoded = serialize_to(value.at(key), output)
+        if not encoded.ok:
+            return Err(encoded.err.at_field(key))
+    return write_ok(output, output.end_object())
+
+
+def serialize_to[Writer, T](
+    value: &const[Option[T]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    if not value.has_value():
+        return write_ok(output, output.write_null())
+    return serialize_to(value.value(), output)
+
+
+def serialize_to[Writer, T, E](
+    value: &const[Result[T, E]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    started = write_ok(output, output.begin_object(1))
+    if not started.ok:
+        return started
+    if value.ok:
+        if not output.write_field("Ok"):
+            return Err(writer_error(output))
+        encoded = serialize_to(value.value, output)
+        if not encoded.ok:
+            return Err(encoded.err.at_field("Ok"))
+    else:
+        if not output.write_field("Err"):
+            return Err(writer_error(output))
+        encoded = serialize_to(value.err, output)
+        if not encoded.ok:
+            return Err(encoded.err.at_field("Err"))
+    return write_ok(output, output.end_object())
+
+
+def serialize_to[Writer, V...](
+    value: &const[variant[V...]],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    started = write_ok(output, output.begin_object(2))
+    if not started.ok:
+        return started
+    if not output.write_field("index"):
+        return Err(writer_error(output))
+    index = serialize_to(u64(value.index()), output)
+    if not index.ok:
+        return Err(index.err.at_field("index"))
+    if not output.write_field("value"):
+        return Err(writer_error(output))
+    encoded: Result[bool, SerddeError] = std.visit[Result[bool, SerddeError]](
+        VariantSerializer[Writer](output=output),
+        value,
+    )
+    if not encoded.ok:
+        return Err(encoded.err.at_field("value"))
+    return write_ok(output, output.end_object())
+
+
+def serialize_to[Writer, T](value: &const[T], output: &Writer) -> Result[bool, SerddeError]:
+    return value.serdde_serialize(output)
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[bool],
+) -> Result[bool, SerddeError]:
+    output: bool = False
+    if not input.get_bool(output):
+        return Err(reader_error(input, "expected bool"))
+    return Ok(output)
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[char],
+) -> Result[char, SerddeError]:
+    output: str = ""
+    if not input.get_string(output) or len(output) != 1:
+        return Err(reader_error(input, "expected one-character string"))
+    return Ok(output[0])
+
+
+def read_i64[Reader](input: &const[Reader]) -> Result[i64, SerddeError]:
+    output: i64 = 0
+    if input.get_i64(output):
+        return Ok(output)
+    positive: u64 = 0
+    if input.get_u64(positive) and positive <= 0x7fffffffffffffff:
+        return Ok(i64(positive))
+    return Err(reader_error(input, "expected signed 64-bit integer"))
+
+
+def read_u64[Reader](input: &const[Reader]) -> Result[u64, SerddeError]:
+    output: u64 = 0
+    if input.get_u64(output):
+        return Ok(output)
+    signed: i64 = 0
+    if input.get_i64(signed) and signed >= 0:
+        return Ok(u64(signed))
+    return Err(reader_error(input, "expected unsigned 64-bit integer"))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[i64],
+) -> Result[i64, SerddeError]:
+    return read_i64(input)
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[i32],
+) -> Result[i32, SerddeError]:
+    decoded = read_i64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    if decoded.value < -2147483648 or decoded.value > 2147483647:
+        return Err(reader_error(input, "integer is out of range for i32"))
+    return Ok(i32(decoded.value))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[i16],
+) -> Result[i16, SerddeError]:
+    decoded = read_i64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    if decoded.value < -32768 or decoded.value > 32767:
+        return Err(reader_error(input, "integer is out of range for i16"))
+    return Ok(i16(decoded.value))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[i8],
+) -> Result[i8, SerddeError]:
+    decoded = read_i64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    if decoded.value < -128 or decoded.value > 127:
+        return Err(reader_error(input, "integer is out of range for i8"))
+    return Ok(i8(decoded.value))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[u64],
+) -> Result[u64, SerddeError]:
+    return read_u64(input)
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[u32],
+) -> Result[u32, SerddeError]:
+    decoded = read_u64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    if decoded.value > 0xffffffff:
+        return Err(reader_error(input, "integer is out of range for u32"))
+    return Ok(u32(decoded.value))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[u16],
+) -> Result[u16, SerddeError]:
+    decoded = read_u64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    if decoded.value > 65535:
+        return Err(reader_error(input, "integer is out of range for u16"))
+    return Ok(u16(decoded.value))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[u8],
+) -> Result[u8, SerddeError]:
+    decoded = read_u64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    if decoded.value > 255:
+        return Err(reader_error(input, "integer is out of range for u8"))
+    return Ok(u8(decoded.value))
+
+
+def read_f64[Reader](input: &const[Reader]) -> Result[f64, SerddeError]:
+    output: f64 = 0.0
+    if input.get_f64(output):
+        return Ok(output)
+    signed: i64 = 0
+    if input.get_i64(signed):
+        return Ok(f64(signed))
+    unsigned: u64 = 0
+    if input.get_u64(unsigned):
+        return Ok(f64(unsigned))
+    return Err(reader_error(input, "expected number"))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[f64],
+) -> Result[f64, SerddeError]:
+    return read_f64(input)
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[f32],
+) -> Result[f32, SerddeError]:
+    decoded = read_f64(input)
+    if not decoded.ok:
+        return Err(decoded.err)
+    return Ok(f32(decoded.value))
+
+
+def deserialize_as[Reader](
+    input: &const[Reader],
+    target: DecodeTarget[str],
+) -> Result[str, SerddeError]:
+    output: str = ""
+    if not input.get_string(output):
+        return Err(reader_error(input, "expected string"))
+    return Ok(output)
+
+
+def deserialize_array_item[Reader, T, N](
+    input: &const[Reader],
+    output: &array[T][N],
+) -> Result[bool, SerddeError]:
+    if not input.is_sequence():
+        return Err(reader_error(input, "expected sequence"))
+    if input.size() != len(output):
+        return Err(reader_error(input, "array extent does not match input sequence length"))
+    index: usize = 0
+    while index < len(output):
+        child = input.element(index)
+        decoded = deserialize_array_item(child, output[index])
+        if not decoded.ok:
+            return Err(decoded.err.at_index(index))
+        index += 1
+    return Ok(True)
+
+
+def deserialize_array_item[Reader, T](
+    input: &const[Reader],
+    output: &T,
+) -> Result[bool, SerddeError]:
+    decoded = deserialize_as(input, DecodeTarget[T]())
+    if not decoded.ok:
+        return Err(decoded.err)
+    output = decoded.value
+    return Ok(True)
+
+
+def deserialize_as[Reader, T, N](
+    input: &const[Reader],
+    target: DecodeTarget[array[T][N]],
+) -> Result[array[T][N], SerddeError]:
+    output: array[T][N]
+    decoded = deserialize_array_item(input, output)
+    if not decoded.ok:
+        return Err(decoded.err)
+    return Ok(output)
+
+
+def deserialize_as[Reader, T](
+    input: &const[Reader],
+    target: DecodeTarget[list[T]],
+) -> Result[list[T], SerddeError]:
+    if not input.is_sequence():
+        return Err(reader_error(input, "expected sequence"))
+    output: list[T] = []
+    index: usize = 0
+    while index < input.size():
+        child = input.element(index)
+        decoded = deserialize_as(child, DecodeTarget[T]())
+        if not decoded.ok:
+            return Err(decoded.err.at_index(index))
+        output.append(decoded.value)
+        index += 1
+    return Ok(output)
+
+
+def deserialize_as[Reader, T](
+    input: &const[Reader],
+    target: DecodeTarget[set[T]],
+) -> Result[set[T], SerddeError]:
+    if not input.is_sequence():
+        return Err(reader_error(input, "expected sequence"))
+    output: set[T] = {}
+    index: usize = 0
+    while index < input.size():
+        child = input.element(index)
+        decoded = deserialize_as(child, DecodeTarget[T]())
+        if not decoded.ok:
+            return Err(decoded.err.at_index(index))
+        output.insert(decoded.value)
+        index += 1
+    return Ok(output)
+
+
+def deserialize_as[Reader, T](
+    input: &const[Reader],
+    target: DecodeTarget[dict[str, T]],
+) -> Result[dict[str, T], SerddeError]:
+    if not input.is_object():
+        return Err(reader_error(input, "expected object"))
+    output: dict[str, T] = {}
+    index: usize = 0
+    while index < input.size():
+        key = input.key(index)
+        child = input.element(index)
+        decoded = deserialize_as(child, DecodeTarget[T]())
+        if not decoded.ok:
+            return Err(decoded.err.at_field(key))
+        output[key] = decoded.value
+        index += 1
+    return Ok(output)
+
+
+def deserialize_as[Reader, T](
+    input: &const[Reader],
+    target: DecodeTarget[Option[T]],
+) -> Result[Option[T], SerddeError]:
+    if input.is_null():
+        return Ok(None)
+    decoded = deserialize_as(input, DecodeTarget[T]())
+    if not decoded.ok:
+        return Err(decoded.err)
+    return Ok(decoded.value)
+
+
+def deserialize_as[Reader, T, E](
+    input: &const[Reader],
+    target: DecodeTarget[Result[T, E]],
+) -> Result[Result[T, E], SerddeError]:
+    if not input.is_object() or input.size() != 1:
+        return Err(reader_error(input, "expected object with exactly one of Ok or Err"))
+    key = input.key(0)
+    child = input.element(0)
+    if key == "Ok":
+        decoded_ok = deserialize_as(child, DecodeTarget[T]())
+        if not decoded_ok.ok:
+            return Err(decoded_ok.err.at_field("Ok"))
+        return Ok(Ok(decoded_ok.value))
+    if key == "Err":
+        decoded_err = deserialize_as(child, DecodeTarget[E]())
+        if not decoded_err.ok:
+            return Err(decoded_err.err.at_field("Err"))
+        return Ok(Err(decoded_err.value))
+    return Err(reader_error(input, "expected object with exactly one of Ok or Err"))
+
+
+def deserialize_as[Reader, V...](
+    input: &const[Reader],
+    target: DecodeTarget[variant[V...]],
+) -> Result[variant[V...], SerddeError]:
+    if not input.is_object():
+        return Err(reader_error(input, "expected variant object"))
+    if not input.has_field("index"):
+        return Err(reader_error(input, "missing variant index").at_field("index"))
+    if not input.has_field("value"):
+        return Err(reader_error(input, "missing variant value").at_field("value"))
+    decoded_index = deserialize_as(input.field("index"), DecodeTarget[u64]())
+    if not decoded_index.ok:
+        return Err(decoded_index.err.at_field("index"))
+    if decoded_index.value >= u64(serdde_variant_size[variant[V...]]()):
+        return Err(reader_error(input.field("index"), "variant index is out of range").at_field("index"))
+    decoder = VariantDeserializer[Reader](
+        input=input.field("value"),
+        error=type_error("variant alternative failed to decode"),
+    )
+    decoded = serdde_decode_variant[variant[V...]](
+        usize(decoded_index.value),
+        decoder,
+    )
+    if not decoded.has_value():
+        return Err(decoder.error.at_field("value"))
+    return Ok(decoded.value())
+
+
+def deserialize_as[Reader, T](
+    input: &const[Reader],
+    target: DecodeTarget[T],
+) -> Result[T, SerddeError]:
+    return T.serdde_deserialize(input)
+
+
+def deserialize_from[T, Reader](input: &const[Reader]) -> Result[T, SerddeError]:
+    return deserialize_as(input, DecodeTarget[T]())

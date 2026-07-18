@@ -1,5 +1,7 @@
 from serdde.convert import from_value
 from serdde.convert import to_value
+from serdde.json import dumps
+from serdde.json import loads
 from serdde.macros import Serde
 from serdde.value import Value
 from serdde.value import empty_object_value
@@ -50,6 +52,25 @@ class Flattened:
 
     @Serde(flatten=True)
     address: Address
+
+
+@derive(Serde)
+class FlatLeft:
+    value: i32
+
+
+@derive(Serde)
+class FlatRight:
+    value: i32
+
+
+@derive(Serde)
+class FlattenCollision:
+    @Serde(flatten=True)
+    left: FlatLeft
+
+    @Serde(flatten=True)
+    right: FlatRight
 
 
 def configured_input() -> Value:
@@ -118,6 +139,49 @@ def test_flatten_round_trip() -> i32:
     return 0
 
 
+def test_direct_flatten_round_trip() -> i32:
+    source = Flattened(id=3, address=Address(city="Paris"))
+    encoded = dumps(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(text):
+            if text != "{\"id\":3,\"city\":\"Paris\"}":
+                return 2
+            decoded = loads[Flattened](text)
+            match decoded:
+                case Err(_):
+                    return 3
+                case Ok(output):
+                    if output.id != 3 or output.address.city != "Paris":
+                        return 4
+    return 0
+
+
+def test_flatten_collision() -> i32:
+    source = FlattenCollision(
+        left=FlatLeft(value=1),
+        right=FlatRight(value=2),
+    )
+    encoded = dumps(source)
+    match encoded:
+        case Ok(_):
+            return 1
+        case Err(error):
+            if error.message != "duplicate object field: value":
+                return 2
+            if error.path_string() != "$.right.value":
+                return 3
+    value_encoded = to_value(source)
+    match value_encoded:
+        case Ok(_):
+            return 4
+        case Err(error):
+            if error.message != "duplicate object field: value":
+                return 5
+    return 0
+
+
 def test_unknown_and_duplicate_fields() -> i32:
     unknown = configured_input()
     unknown.set_field("extra", i64_value(1))
@@ -151,7 +215,13 @@ def main() -> i32:
     status = test_flatten_round_trip()
     if status != 0:
         return 30 + status
-    status = test_unknown_and_duplicate_fields()
+    status = test_direct_flatten_round_trip()
     if status != 0:
         return 40 + status
+    status = test_flatten_collision()
+    if status != 0:
+        return 50 + status
+    status = test_unknown_and_duplicate_fields()
+    if status != 0:
+        return 60 + status
     return 0

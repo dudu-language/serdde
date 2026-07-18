@@ -1,9 +1,10 @@
-from serdde.convert import from_value
-from serdde.convert import to_value
+from cpp.path import json_wire_native.hpp
 from serdde.error import SerddeError
-from serdde.format_support import conversion_error
+from serdde.error import syntax_error
 from serdde.json_parser import parse_json
 from serdde.json_writer import write_json
+from serdde.protocol import deserialize_from
+from serdde.protocol import serialize_to
 from serdde.value import Value
 
 
@@ -12,17 +13,15 @@ def loads(source: str) -> Result[Value, SerddeError]:
 
 
 def loads[T](source: str) -> Result[T, SerddeError]:
-    parsed = parse_json(source)
-    match parsed:
-        case Err(error):
-            return Err(error)
-        case Ok(value):
-            decoded = from_value[T](value)
-            match decoded:
-                case Err(error):
-                    return Err(conversion_error("json", error, value))
-                case Ok(ready):
-                    return Ok(ready)
+    input = serdde_wire.JsonReader(source)
+    if not input.valid():
+        return Err(syntax_error(
+            input.error_message(),
+            input.line(),
+            input.column(),
+            input.offset(),
+        ).with_format("json"))
+    return deserialize_from[T, serdde_wire.JsonReader](input)
 
 
 def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
@@ -35,9 +34,8 @@ def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
 
 
 def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
-    converted = to_value(value)
-    match converted:
-        case Err(error):
-            return Err(error.with_format("json"))
-        case Ok(ready):
-            return dumps_value(ready)
+    output = serdde_wire.JsonWriter()
+    encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("json"))
+    return Ok(output.output())

@@ -1,5 +1,7 @@
 from serdde.convert import from_value
 from serdde.convert import to_value
+from serdde.json import dumps
+from serdde.json import loads
 from serdde.macros import Serde
 from serdde.value import empty_object_value
 from serdde.value import i64_value
@@ -278,6 +280,62 @@ def test_directional_skips() -> i32:
                     return 6
 
 
+def test_direct_json() -> i32:
+    external = dumps(Event.Move(x=3, y=4))
+    if not external.ok or external.value != "{\"Move\":{\"x\":3,\"y\":4}}":
+        return 1
+    external_ready = loads[Event](external.value)
+    if not external_ready.ok:
+        return 2
+    match external_ready.value:
+        case Event.Move(x, y):
+            if x != 3 or y != 4:
+                return 3
+        case _:
+            return 4
+
+    alias_ready = loads[Event]("{\"key\":{\"key\":9}}")
+    if not alias_ready.ok:
+        return 5
+    match alias_ready.value:
+        case Event.KeyDown(key):
+            if key != 9:
+                return 6
+        case _:
+            return 7
+
+    internal = dumps(InternalMessage.Write(text="hello"))
+    if not internal.ok or internal.value != "{\"kind\":\"Write\",\"text\":\"hello\"}":
+        return 8
+    internal_ready = loads[InternalMessage](internal.value)
+    if not internal_ready.ok:
+        return 9
+
+    adjacent = dumps(AdjacentMessage.Count(value=42))
+    if not adjacent.ok or adjacent.value != "{\"type\":\"Count\",\"data\":{\"value\":42}}":
+        return 10
+    adjacent_ready = loads[AdjacentMessage](adjacent.value)
+    if not adjacent_ready.ok:
+        return 11
+
+    untagged = dumps(UntaggedValue.Count(count=11))
+    if not untagged.ok or untagged.value != "{\"count\":11}":
+        return 12
+    untagged_ready = loads[UntaggedValue](untagged.value)
+    if not untagged_ready.ok:
+        return 13
+    empty = loads[UntaggedValue]("null")
+    if not empty.ok:
+        return 14
+
+    unknown = loads[AdjacentAliases](
+        "{\"type\":\"payload\",\"data\":{\"count\":8},\"extra\":1}",
+    )
+    if unknown.ok or unknown.err.path_string() != "$.extra":
+        return 15
+    return 0
+
+
 def main() -> i32:
     status = test_external()
     if status != 0:
@@ -303,4 +361,7 @@ def main() -> i32:
     status = test_directional_skips()
     if status != 0:
         return 80 + status
+    status = test_direct_json()
+    if status != 0:
+        return 100 + status
     return 0

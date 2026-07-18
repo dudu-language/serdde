@@ -1,0 +1,500 @@
+from serdde.macro_class_direct import decode_expression
+from serdde.macro_class_direct import failed_result
+from serdde.macro_class_direct import field_default_expression
+from serdde.macro_class_direct import field_has_default
+from serdde.macro_class_direct import protocol_call
+from serdde.macro_class_direct import reader_parameter
+from serdde.macro_class_direct import return_result_error
+from serdde.macro_class_direct import skipped_for_decode
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_config import bool_option
+from serdde.macro_config import serialized_name
+from serdde.macro_config import snake_name
+from serdde.macro_config import string_list_option
+from serdde.macro_config import string_option
+from serdde.macro_enum_support import append_statements
+from serdde.macro_enum_support import enum_names
+from serdde.macro_enum_support import enum_result
+from serdde.macro_enum_support import generated_names_for_variant
+from serdde.macro_enum_support import variant_value
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import ok
+from serdde.macro_support import result_type
+import dudu.ast as ast
+
+
+def helper_name(variant: &const[ast.EnumVariant]) -> str:
+    return "serdde_decode_" + snake_name(variant.name)
+
+
+def input_name(variant: &const[ast.EnumVariant]) -> str:
+    result = "serdde_input"
+    searching = True
+    while searching:
+        searching = False
+        for field in variant.fields:
+            if field.name == result:
+                result += "_"
+                searching = True
+    return result
+
+
+def active_for_decode(variant: &const[ast.EnumVariant]) -> bool:
+    return not (
+        bool_option(variant.attributes, "skip", False)
+        or bool_option(variant.attributes, "skip_deserializing", False)
+    )
+
+
+def reader_failure(input: ast.Expression, message: str) -> ast.Expression:
+    return err(protocol_call(
+        "reader_error",
+        [input, ast.string_expression(message)],
+    ))
+
+
+def and_expression(values: list[ast.Expression]) -> ast.Expression:
+    result = ast.bool_expression(True)
+    for value in values:
+        result = ast.binary_expression(result, "and", value)
+    return result
+
+
+def decode_payload_method(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    internal_tag: str,
+) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    parameter_name = input_name(variant)
+    input = ast.name_expression(parameter_name)
+    if len(variant.fields) == 0:
+        if bool_option(item.attributes, "untagged", False):
+            body.append(ast.if_statement(
+                ast.unary_expression("not", method(input, "is_null", [])),
+                [ast.return_statement(reader_failure(input, "expected null unit variant"))],
+            ))
+        body.append(ast.return_statement(ok(variant_value(item, variant))))
+        return ast.FunctionDecl(
+            name=helper_name(variant),
+            generic_parameters=[ast.generic_parameter("Reader")],
+            parameters=[reader_parameter(parameter_name)],
+            return_type=enum_result(item),
+            body=body,
+            is_static=True,
+        )
+
+    body.append(ast.if_statement(
+        ast.unary_expression("not", method(input, "is_object", [])),
+        [ast.return_statement(reader_failure(input, "expected enum payload object"))],
+    ))
+    names = generated_names_for_variant(variant)
+    accepted: list[str] = []
+    constructor_arguments: list[ast.Expression] = []
+    for field in variant.fields:
+        field_name = serialized_name(field.name, field.attributes, "")
+        aliases = string_list_option(field.attributes, "alias")
+        accepted.append(field_name)
+        for alias in aliases:
+            accepted.append(alias)
+        if skipped_for_decode(field):
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                field_default_expression(field),
+            ))
+            continue
+        if bool_option(field.attributes, "flatten", False):
+            decoded = names.take("decoded")
+            body.append(ast.variable_statement(
+                decoded,
+                result_type(field.type),
+                decode_expression(field, input),
+            ))
+            body.append(ast.if_statement(
+                failed_result(ast.name_expression(decoded)),
+                [return_result_error(
+                    ast.name_expression(decoded),
+                    ast.string_expression(field.name),
+                )],
+            ))
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                member(ast.name_expression(decoded), "value"),
+            ))
+            constructor_arguments.append(ast.named_argument_expression(
+                field.name,
+                ast.name_expression(field.name),
+            ))
+            continue
+
+        selected = names.take("field_name")
+        present = names.take("field_present")
+        body.append(ast.variable_statement(
+            selected,
+            ast.named_type("str"),
+            ast.string_expression(field_name),
+        ))
+        body.append(ast.variable_statement(
+            present,
+            ast.named_type("bool"),
+            ast.bool_expression(False),
+        ))
+        candidates: list[str] = [field_name]
+        for alias in aliases:
+            candidates.append(alias)
+        for candidate in candidates:
+            body.append(ast.if_statement(
+                method(input, "has_field", [ast.string_expression(candidate)]),
+                [
+                    ast.if_statement(
+                        ast.name_expression(present),
+                        [ast.return_statement(err(call(
+                            "_serdde_error",
+                            "duplicate_field_error",
+                            [ast.string_expression(candidate)],
+                        )))],
+                    ),
+                    ast.assignment_statement(
+                        ast.name_expression(selected),
+                        ast.string_expression(candidate),
+                    ),
+                    ast.assignment_statement(
+                        ast.name_expression(present),
+                        ast.bool_expression(True),
+                    ),
+                ],
+            ))
+        if field_has_default(field):
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                field_default_expression(field),
+            ))
+            decoded = names.take("decoded")
+            decode_body: list[ast.Statement] = [ast.variable_statement(
+                decoded,
+                result_type(field.type),
+                decode_expression(field, method(input, "field", [ast.name_expression(selected)])),
+            )]
+            decode_body.append(ast.if_statement(
+                failed_result(ast.name_expression(decoded)),
+                [return_result_error(
+                    ast.name_expression(decoded),
+                    ast.name_expression(selected),
+                )],
+            ))
+            decode_body.append(ast.assignment_statement(
+                ast.name_expression(field.name),
+                member(ast.name_expression(decoded), "value"),
+            ))
+            body.append(ast.if_statement(ast.name_expression(present), decode_body))
+        else:
+            body.append(ast.if_statement(
+                ast.unary_expression("not", ast.name_expression(present)),
+                [ast.return_statement(err(call(
+                    "_serdde_error",
+                    "missing_field_error",
+                    [ast.string_expression(field_name)],
+                )))],
+            ))
+            decoded = names.take("decoded")
+            body.append(ast.variable_statement(
+                decoded,
+                result_type(field.type),
+                decode_expression(field, method(input, "field", [ast.name_expression(selected)])),
+            ))
+            body.append(ast.if_statement(
+                failed_result(ast.name_expression(decoded)),
+                [return_result_error(
+                    ast.name_expression(decoded),
+                    ast.name_expression(selected),
+                )],
+            ))
+            body.append(ast.variable_statement(
+                field.name,
+                field.type,
+                member(ast.name_expression(decoded), "value"),
+            ))
+        constructor_arguments.append(ast.named_argument_expression(
+            field.name,
+            ast.name_expression(field.name),
+        ))
+
+    if bool_option(item.attributes, "deny_unknown_fields", False):
+        index = names.take("index")
+        key = names.take("key")
+        comparisons: list[ast.Expression] = []
+        for name in accepted:
+            comparisons.append(ast.binary_expression(
+                ast.name_expression(key),
+                "!=",
+                ast.string_expression(name),
+            ))
+        if internal_tag != "":
+            comparisons.append(ast.binary_expression(
+                ast.name_expression(key),
+                "!=",
+                ast.string_expression(internal_tag),
+            ))
+        loop_body: list[ast.Statement] = [ast.variable_statement(
+            key,
+            ast.named_type("str"),
+            method(input, "key", [ast.name_expression(index)]),
+        )]
+        loop_body.append(ast.if_statement(
+            and_expression(comparisons),
+            [ast.return_statement(err(call(
+                "_serdde_error",
+                "unknown_field_error",
+                [ast.name_expression(key)],
+            )))],
+        ))
+        loop_body.append(ast.compound_assignment_statement(
+            ast.name_expression(index),
+            "+=",
+            ast.int_expression("1"),
+        ))
+        body.append(ast.variable_statement(index, ast.named_type("usize"), ast.int_expression("0")))
+        body.append(ast.while_statement(
+            ast.binary_expression(
+                ast.name_expression(index),
+                "<",
+                method(input, "size", []),
+            ),
+            loop_body,
+        ))
+    body.append(ast.return_statement(ok(variant_value(item, variant))))
+    return ast.FunctionDecl(
+        name=helper_name(variant),
+        generic_parameters=[ast.generic_parameter("Reader")],
+        parameters=[reader_parameter(parameter_name)],
+        return_type=enum_result(item),
+        body=body,
+        is_static=True,
+    )
+
+
+def helper_call(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    input: ast.Expression,
+) -> ast.Expression:
+    return ast.template_call_expression(
+        member(ast.name_expression(item.name), helper_name(variant)),
+        [ast.named_type("Reader")],
+        [input],
+    )
+
+
+def return_for_variant_names(
+    item: &const[ast.EnumDecl],
+    variant: &const[ast.EnumVariant],
+    selected: ast.Expression,
+    payload: ast.Expression,
+) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    for name in enum_names(item, variant):
+        body.append(ast.if_statement(
+            ast.binary_expression(selected, "==", ast.string_expression(name)),
+            [ast.return_statement(helper_call(item, variant, payload))],
+        ))
+    return body
+
+
+def external_decode_body(item: &const[ast.EnumDecl]) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    input = ast.name_expression("input")
+    body.append(ast.variable_statement("selected", ast.named_type("str"), ast.string_expression("")))
+    unit_body: list[ast.Statement] = []
+    for variant in item.variants:
+        if active_for_decode(variant) and len(variant.fields) == 0:
+            append_statements(unit_body, return_for_variant_names(
+                item,
+                variant,
+                ast.name_expression("selected"),
+                input,
+            ))
+    body.append(ast.if_statement(
+        method(input, "get_string", [ast.name_expression("selected")]),
+        unit_body,
+    ))
+    object_body: list[ast.Statement] = [ast.if_statement(
+        ast.binary_expression(method(input, "size", []), "!=", ast.int_expression("1")),
+        [ast.return_statement(reader_failure(
+            input,
+            "externally tagged enum requires one variant key",
+        ))],
+    )]
+    object_body.append(ast.assignment_statement(
+        ast.name_expression("selected"),
+        method(input, "key", [ast.int_expression("0")]),
+    ))
+    payload = method(input, "element", [ast.int_expression("0")])
+    for variant in item.variants:
+        if active_for_decode(variant) and len(variant.fields) > 0:
+            append_statements(object_body, return_for_variant_names(
+                item,
+                variant,
+                ast.name_expression("selected"),
+                payload,
+            ))
+    body.append(ast.if_statement(method(input, "is_object", []), object_body))
+    body.append(ast.return_statement(reader_failure(
+        input,
+        "unknown externally tagged enum variant",
+    )))
+    return body
+
+
+def tagged_decode_body(item: &const[ast.EnumDecl], tag: str, content: str) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    input = ast.name_expression("input")
+    body.append(ast.if_statement(
+        ast.unary_expression("not", method(input, "is_object", [])),
+        [ast.return_statement(reader_failure(input, "expected tagged enum object"))],
+    ))
+    body.append(ast.if_statement(
+        ast.unary_expression("not", method(input, "has_field", [ast.string_expression(tag)])),
+        [ast.return_statement(err(call(
+            "_serdde_error",
+            "missing_field_error",
+            [ast.string_expression(tag)],
+        )))],
+    ))
+    body.append(ast.variable_statement("selected", ast.named_type("str"), ast.string_expression("")))
+    tag_input = method(input, "field", [ast.string_expression(tag)])
+    body.append(ast.if_statement(
+        ast.unary_expression("not", method(
+            tag_input,
+            "get_string",
+            [ast.name_expression("selected")],
+        )),
+        [ast.return_statement(reader_failure(tag_input, "enum tag must be a string"))],
+    ))
+    if content != "" and bool_option(item.attributes, "deny_unknown_fields", False):
+        body.append(ast.variable_statement("outer_index", ast.named_type("usize"), ast.int_expression("0")))
+        body.append(ast.while_statement(
+            ast.binary_expression(
+                ast.name_expression("outer_index"),
+                "<",
+                method(input, "size", []),
+            ),
+            [
+                ast.variable_statement(
+                    "outer_key",
+                    ast.named_type("str"),
+                    method(input, "key", [ast.name_expression("outer_index")]),
+                ),
+                ast.if_statement(
+                    and_expression([
+                        ast.binary_expression(
+                            ast.name_expression("outer_key"),
+                            "!=",
+                            ast.string_expression(tag),
+                        ),
+                        ast.binary_expression(
+                            ast.name_expression("outer_key"),
+                            "!=",
+                            ast.string_expression(content),
+                        ),
+                    ]),
+                    [ast.return_statement(err(call(
+                        "_serdde_error",
+                        "unknown_field_error",
+                        [ast.name_expression("outer_key")],
+                    )))],
+                ),
+                ast.compound_assignment_statement(
+                    ast.name_expression("outer_index"),
+                    "+=",
+                    ast.int_expression("1"),
+                ),
+            ],
+        ))
+    for variant in item.variants:
+        if not active_for_decode(variant):
+            continue
+        payload = input
+        if content != "" and len(variant.fields) > 0:
+            missing = ast.unary_expression(
+                "not",
+                method(input, "has_field", [ast.string_expression(content)]),
+            )
+            for accepted_name in enum_names(item, variant):
+                body.append(ast.if_statement(
+                    and_expression([
+                        ast.binary_expression(
+                            ast.name_expression("selected"),
+                            "==",
+                            ast.string_expression(accepted_name),
+                        ),
+                        missing,
+                    ]),
+                    [ast.return_statement(err(call(
+                        "_serdde_error",
+                        "missing_field_error",
+                        [ast.string_expression(content)],
+                    )))],
+                ))
+            payload = method(input, "field", [ast.string_expression(content)])
+        append_statements(body, return_for_variant_names(
+            item,
+            variant,
+            ast.name_expression("selected"),
+            payload,
+        ))
+    body.append(ast.return_statement(reader_failure(input, "unknown tagged enum variant")))
+    return body
+
+
+def untagged_decode_body(item: &const[ast.EnumDecl]) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    for variant in item.variants:
+        if not active_for_decode(variant):
+            continue
+        attempt = "serdde_attempt_" + snake_name(variant.name)
+        body.append(ast.variable_statement(
+            attempt,
+            enum_result(item),
+            helper_call(item, variant, ast.name_expression("input")),
+        ))
+        body.append(ast.if_statement(
+            member(ast.name_expression(attempt), "ok"),
+            [ast.return_statement(ast.name_expression(attempt))],
+        ))
+    body.append(ast.return_statement(reader_failure(
+        ast.name_expression("input"),
+        "value did not match any untagged variant",
+    )))
+    return body
+
+
+def enum_decode_methods(item: &const[ast.EnumDecl]) -> list[ast.FunctionDecl]:
+    methods: list[ast.FunctionDecl] = []
+    tag = string_option(item.attributes, "tag", "")
+    content = string_option(item.attributes, "content", "")
+    internal_tag = ""
+    if tag != "" and content == "":
+        internal_tag = tag
+    for variant in item.variants:
+        methods.append(decode_payload_method(item, variant, internal_tag))
+    body: list[ast.Statement] = []
+    if bool_option(item.attributes, "untagged", False):
+        body = untagged_decode_body(item)
+    elif tag == "":
+        body = external_decode_body(item)
+    else:
+        body = tagged_decode_body(item, tag, content)
+    methods.append(ast.FunctionDecl(
+        name="serdde_deserialize",
+        generic_parameters=[ast.generic_parameter("Reader")],
+        parameters=[reader_parameter("input")],
+        return_type=enum_result(item),
+        body=body,
+        is_static=True,
+    ))
+    return methods

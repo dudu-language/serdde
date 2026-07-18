@@ -1,35 +1,44 @@
 from cpp import string
 from cpp import utility
-from serdde.convert import decode_i32
-from serdde.convert import decode_str
 from serdde.error import SerddeError
-from serdde.error import type_error
 from serdde.json import dumps
 from serdde.json import loads
 from serdde.macros import Serde
-from serdde.value import Value
-from serdde.value import ValueKind
-from serdde.value import empty_object_value
-from serdde.value import i64_value
-from serdde.value import string_value
+from serdde.protocol import deserialize_from
+from serdde.protocol import reader_error
+from serdde.protocol import serialize_to
+from serdde.protocol import write_ok
 
 
 class PairSerde:
-    def serialize(
+    def serialize[Writer](
         value: &const[std.pair[std.string, i32]],
-    ) -> Result[Value, SerddeError]:
-        output = empty_object_value()
-        output.set_field("name", string_value(value.first))
-        output.set_field("score", i64_value(i64(value.second)))
-        return Ok(output)
+        output: &Writer,
+    ) -> Result[bool, SerddeError]:
+        started = write_ok(output, output.begin_object(2))
+        if not started.ok:
+            return started
+        name_field = write_ok(output, output.write_field("name"))
+        if not name_field.ok:
+            return name_field
+        name = serialize_to(value.first, output)
+        if not name.ok:
+            return Err(name.err.at_field("name"))
+        score_field = write_ok(output, output.write_field("score"))
+        if not score_field.ok:
+            return score_field
+        score = serialize_to(value.second, output)
+        if not score.ok:
+            return Err(score.err.at_field("score"))
+        return write_ok(output, output.end_object())
 
-    def deserialize(
-        value: &const[Value],
+    def deserialize[Reader](
+        input: &const[Reader],
     ) -> Result[std.pair[std.string, i32], SerddeError]:
-        if value.kind != ValueKind.Object:
-            return Err(type_error("expected pair object"))
-        name = decode_str(value.field("name"))
-        score = decode_i32(value.field("score"))
+        if not input.is_object():
+            return Err(reader_error(input, "expected pair object"))
+        name = deserialize_from[str, Reader](input.field("name"))
+        score = deserialize_from[i32, Reader](input.field("score"))
         if not name.ok:
             return Err(name.err.at_field("name"))
         if not score.ok:

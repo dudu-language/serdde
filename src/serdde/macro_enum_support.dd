@@ -8,9 +8,7 @@ from serdde.macro_support import call
 from serdde.macro_support import err
 from serdde.macro_support import member
 from serdde.macro_support import ok
-from serdde.macro_support import qname
 from serdde.macro_support import result_type
-from serdde.macro_support import value_type
 import dudu.ast as ast
 
 
@@ -75,27 +73,6 @@ def variant_value(
     return ast.call_expression(path, values)
 
 
-def field_has_default(field: &const[ast.FieldDecl]) -> bool:
-    return (
-        field.value.has_value()
-        or bool_option(field.attributes, "default", False)
-        or string_option(field.attributes, "default_with", "") != ""
-    )
-
-
-def field_default_expression(field: &const[ast.FieldDecl]) -> ast.Expression:
-    if field.value.has_value():
-        return field.value.value()
-    default_with = string_option(field.attributes, "default_with", "")
-    if default_with != "":
-        return ast.call_expression(ast.name_expression(default_with), [])
-    return ast.template_call_expression(
-        qname("_serdde_convert", "default_value"),
-        [field.type],
-        [],
-    )
-
-
 def invalid_enum(message: str) -> ast.Expression:
     return err(call(
         "_serdde_error",
@@ -106,14 +83,6 @@ def invalid_enum(message: str) -> ast.Expression:
 
 def enum_result(item: &const[ast.EnumDecl]) -> ast.TypeRef:
     return result_type(ast.named_type(item.name))
-
-
-def value_is_kind(value: ast.Expression, kind: str) -> ast.Expression:
-    return ast.binary_expression(
-        member(value, "kind"),
-        "==",
-        member(qname("_serdde_value", "ValueKind"), kind),
-    )
 
 
 def field_validation(field: &const[ast.FieldDecl], deny_unknown: bool, out: &ast.Expansion):
@@ -129,7 +98,12 @@ def field_validation(field: &const[ast.FieldDecl], deny_unknown: bool, out: &ast
         bool_option(field.attributes, "skip", False)
         or bool_option(field.attributes, "skip_deserializing", False)
     )
-    if skipped and not field_has_default(field):
+    has_default = (
+        field.value.has_value()
+        or default
+        or default_with != ""
+    )
+    if skipped and not has_default:
         out.add_diagnostic(ast.error(
             field.range,
             "skipped deserialization requires a field default, default=True, or default_with",

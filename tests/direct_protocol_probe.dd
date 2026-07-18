@@ -1,0 +1,35 @@
+from serdde.error import SerddeError
+from serdde.protocol import DecodeTarget
+from serdde.protocol import deserialize_as
+from serdde.protocol import deserialize_from
+from serdde.protocol import serialize_to
+from serdde.value_backend import ValueReader
+from serdde.value_backend import ValueWriter
+
+
+class Probe:
+    value: i32
+
+    def serdde_serialize[Writer](self: &const[Self], output: &Writer) -> Result[bool, SerddeError]:
+        return serialize_to(self.value, output)
+
+    def serdde_deserialize[Reader](input: &const[Reader]) -> Result[Probe, SerddeError]:
+        decoded = deserialize_as(input, DecodeTarget[i32]())
+        if not decoded.ok:
+            return Err(decoded.err)
+        return Ok(Probe(value=decoded.value))
+
+
+def main() -> i32:
+    output = ValueWriter()
+    encoded = serialize_to(Probe(value=42), output)
+    if not encoded.ok:
+        return 1
+    if output.root.i64_value != 42:
+        return 2
+    input = ValueReader(value=output.root)
+    decoded = deserialize_from[Probe, ValueReader](input)
+    if not decoded.ok or decoded.value.value != 42:
+        return 3
+
+    return 0

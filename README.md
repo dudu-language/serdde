@@ -106,6 +106,7 @@ Run the heavier JSON comparison separately:
 - [Generated code](docs/generated-code.md)
 - [Editor behavior](docs/editor.md)
 - [Benchmarks](docs/benchmarks.md)
+- [Direct wire, optimized JSON, and CBOR plan](docs/direct-wire-plan.md)
 
 ## License
 

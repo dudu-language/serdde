@@ -50,3 +50,27 @@ performance.
 
 Re-run the script before using these values in release notes. The checked-in
 numbers describe one machine and one record shape, not every workload.
+
+## Direct-Wire Performance Requirements
+
+The mandatory `Value` path is being replaced according to the
+[Direct Wire And Binary Plan](direct-wire-plan.md). The resulting benchmark
+suite must report more than elapsed time:
+
+- typed encode and decode latency and throughput;
+- allocation count and allocated bytes;
+- peak resident memory;
+- parser, conversion, and writer time where separable;
+- output size, generated C++ size, and compile time;
+- small, nested, collection-heavy, and malformed-input workloads.
+
+Equivalent Rust Serde fixtures are mandatory comparison points. JSON uses
+`serde_json`; CBOR uses a maintained Serde-compatible implementation. Benchmark
+sources remain checked in and record toolchains, dependency versions,
+optimization settings, and machine details. Results include cold and warm
+compilation cost and binary size as well as runtime, allocation, memory, and
+wire-size measurements.
+
+Normal typed operations must perform no intermediate `Value` allocations.
+Allocations owned by destination strings and containers remain part of the
+reported cost.

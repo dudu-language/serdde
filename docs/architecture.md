@@ -1,6 +1,9 @@
 # Serdde Architecture
 
-Serdde separates typed conversion from wire formats.
+Serdde separates typed conversion from wire formats. The current implementation
+uses `Value` as its common conversion layer. The target architecture replaces
+that mandatory tree with direct serializer and deserializer protocols; the
+complete migration is specified in [Direct Wire And Binary Plan](direct-wire-plan.md).
 
 ## Layers
 
@@ -8,6 +11,13 @@ Serdde separates typed conversion from wire formats.
 2. Derived and handwritten codecs convert Dudu values to and from `Value`.
 3. Format modules parse and write `Value` without knowing user types.
 4. Convenience APIs compose a typed codec with a format.
+
+This is the current implementation structure, not the permanent dependency
+direction. After the direct-wire migration, generated codecs target structured
+format-neutral protocols. JSON, CBOR, DSON, and `Value` implement those
+protocols as peer backends. `Value` remains available for callers that
+intentionally need dynamic data, but typed `dumps` and `loads` do not traverse
+it.
 
 JSON is not embedded in generated derives. Adding a format does not require a
 new derive.

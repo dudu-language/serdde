@@ -22,3 +22,7 @@ kind = "executable"
 [targets.enums]
 entry = "tests/enum_main.dd"
 kind = "executable"
+
+[targets.generics]
+entry = "tests/generic_main.dd"
+kind = "executable"

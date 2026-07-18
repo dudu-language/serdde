@@ -3,9 +3,11 @@ from serdde.error import type_error
 from serdde.value import Value
 from serdde.value import ValueKind
 from serdde.value import bool_value
+from serdde.value import empty_object_value
 from serdde.value import f64_value
 from serdde.value import i64_value
 from serdde.value import null_value
+from serdde.value import sequence_value
 from serdde.value import string_value
 from serdde.value import u64_value
 
@@ -219,9 +221,280 @@ def encode_none() -> Value:
     return null_value()
 
 
+def to_value(value: &const[bool]) -> Result[Value, SerddeError]:
+    return Ok(encode_bool(value))
+
+
+def to_value(value: &const[char]) -> Result[Value, SerddeError]:
+    return Ok(encode_char(value))
+
+
+def to_value(value: &const[i8]) -> Result[Value, SerddeError]:
+    return Ok(encode_i8(value))
+
+
+def to_value(value: &const[i16]) -> Result[Value, SerddeError]:
+    return Ok(encode_i16(value))
+
+
+def to_value(value: &const[i32]) -> Result[Value, SerddeError]:
+    return Ok(encode_i32(value))
+
+
+def to_value(value: &const[i64]) -> Result[Value, SerddeError]:
+    return Ok(encode_i64(value))
+
+
+def to_value(value: &const[u8]) -> Result[Value, SerddeError]:
+    return Ok(encode_u8(value))
+
+
+def to_value(value: &const[u16]) -> Result[Value, SerddeError]:
+    return Ok(encode_u16(value))
+
+
+def to_value(value: &const[u32]) -> Result[Value, SerddeError]:
+    return Ok(encode_u32(value))
+
+
+def to_value(value: &const[u64]) -> Result[Value, SerddeError]:
+    return Ok(encode_u64(value))
+
+
+def to_value(value: &const[f32]) -> Result[Value, SerddeError]:
+    return Ok(encode_f32(value))
+
+
+def to_value(value: &const[f64]) -> Result[Value, SerddeError]:
+    return Ok(encode_f64(value))
+
+
+def to_value(value: &const[str]) -> Result[Value, SerddeError]:
+    return Ok(encode_str(value))
+
+
+def to_value[T](value: &const[list[T]]) -> Result[Value, SerddeError]:
+    output: list[Value] = []
+    index: usize = 0
+    for item in value:
+        encoded = to_value(item)
+        match encoded:
+            case Err(error):
+                return Err(error.at_index(index))
+            case Ok(ready):
+                output.append(ready)
+        index += 1
+    return Ok(sequence_value(output))
+
+
+def to_value[T](value: &const[set[T]]) -> Result[Value, SerddeError]:
+    output: list[Value] = []
+    index: usize = 0
+    for item in value:
+        encoded = to_value(item)
+        match encoded:
+            case Err(error):
+                return Err(error.at_index(index))
+            case Ok(ready):
+                output.append(ready)
+        index += 1
+    return Ok(sequence_value(output))
+
+
+def to_value[T](value: &const[dict[str, T]]) -> Result[Value, SerddeError]:
+    output = empty_object_value()
+    for key in value:
+        item: T = value.at(key)
+        encoded = to_value(item)
+        match encoded:
+            case Err(error):
+                return Err(error.at_field(key))
+            case Ok(ready):
+                output.set_field(key, ready)
+    return Ok(output)
+
+
+def to_value[T](value: &const[Option[T]]) -> Result[Value, SerddeError]:
+    if not value.has_value():
+        return Ok(null_value())
+    return to_value(value.value())
+
+
+def to_value[T, E](value: &const[Result[T, E]]) -> Result[Value, SerddeError]:
+    output = empty_object_value()
+    match value:
+        case Ok(item):
+            encoded = to_value(item)
+            match encoded:
+                case Err(error):
+                    return Err(error.at_field("Ok"))
+                case Ok(ready):
+                    output.set_field("Ok", ready)
+        case Err(item):
+            encoded = to_value(item)
+            match encoded:
+                case Err(error):
+                    return Err(error.at_field("Err"))
+                case Ok(ready):
+                    output.set_field("Err", ready)
+    return Ok(output)
+
+
 def to_value[T](value: &const[T]) -> Result[Value, SerddeError]:
     return value.serdde_serialize()
 
 
-def from_value[T](value: &const[Value]) -> Result[T, SerddeError]:
+class DecodeTarget[T]:
+    marker: bool = False
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[bool]) -> Result[bool, SerddeError]:
+    return decode_bool(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[char]) -> Result[char, SerddeError]:
+    return decode_char(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[i8]) -> Result[i8, SerddeError]:
+    return decode_i8(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[i16]) -> Result[i16, SerddeError]:
+    return decode_i16(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[i32]) -> Result[i32, SerddeError]:
+    return decode_i32(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[i64]) -> Result[i64, SerddeError]:
+    return decode_i64(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[u8]) -> Result[u8, SerddeError]:
+    return decode_u8(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[u16]) -> Result[u16, SerddeError]:
+    return decode_u16(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[u32]) -> Result[u32, SerddeError]:
+    return decode_u32(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[u64]) -> Result[u64, SerddeError]:
+    return decode_u64(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[f32]) -> Result[f32, SerddeError]:
+    return decode_f32(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[f64]) -> Result[f64, SerddeError]:
+    return decode_f64(value)
+
+
+def decode_as(value: &const[Value], target: DecodeTarget[str]) -> Result[str, SerddeError]:
+    return decode_str(value)
+
+
+def decode_as[T](
+    value: &const[Value],
+    target: DecodeTarget[list[T]],
+) -> Result[list[T], SerddeError]:
+    if value.kind != ValueKind.Sequence:
+        return Err(type_error("expected sequence"))
+    output: list[T] = []
+    index: usize = 0
+    for item in value.sequence_value:
+        decoded = from_value[T](item)
+        match decoded:
+            case Err(error):
+                return Err(error.at_index(index))
+            case Ok(ready):
+                output.append(ready)
+        index += 1
+    return Ok(output)
+
+
+def decode_as[T](
+    value: &const[Value],
+    target: DecodeTarget[set[T]],
+) -> Result[set[T], SerddeError]:
+    if value.kind != ValueKind.Sequence:
+        return Err(type_error("expected sequence"))
+    output: set[T] = {}
+    index: usize = 0
+    for item in value.sequence_value:
+        decoded = from_value[T](item)
+        match decoded:
+            case Err(error):
+                return Err(error.at_index(index))
+            case Ok(ready):
+                output.insert(ready)
+        index += 1
+    return Ok(output)
+
+
+def decode_as[T](
+    value: &const[Value],
+    target: DecodeTarget[dict[str, T]],
+) -> Result[dict[str, T], SerddeError]:
+    if value.kind != ValueKind.Object:
+        return Err(type_error("expected object"))
+    output: dict[str, T] = {}
+    for key in value.object_order:
+        decoded = from_value[T](value.field(key))
+        match decoded:
+            case Err(error):
+                return Err(error.at_field(key))
+            case Ok(ready):
+                output[key] = ready
+    return Ok(output)
+
+
+def decode_as[T](
+    value: &const[Value],
+    target: DecodeTarget[Option[T]],
+) -> Result[Option[T], SerddeError]:
+    if value.kind == ValueKind.Null:
+        return Ok(None)
+    decoded = from_value[T](value)
+    match decoded:
+        case Err(error):
+            return Err(error)
+        case Ok(ready):
+            return Ok(ready)
+
+
+def decode_as[T, E](
+    value: &const[Value],
+    target: DecodeTarget[Result[T, E]],
+) -> Result[Result[T, E], SerddeError]:
+    if value.kind != ValueKind.Object:
+        return Err(type_error("expected object with Ok or Err"))
+    if value.has_field("Ok"):
+        decoded_ok = from_value[T](value.field("Ok"))
+        match decoded_ok:
+            case Err(error):
+                return Err(error.at_field("Ok"))
+            case Ok(ready):
+                return Ok(Ok(ready))
+    if value.has_field("Err"):
+        decoded_err = from_value[E](value.field("Err"))
+        match decoded_err:
+            case Err(error):
+                return Err(error.at_field("Err"))
+            case Ok(ready):
+                return Ok(Err(ready))
+    return Err(type_error("expected object with Ok or Err"))
+
+
+def decode_as[T](value: &const[Value], target: DecodeTarget[T]) -> Result[T, SerddeError]:
     return T.serdde_deserialize(value)
+
+
+def from_value[T](value: &const[Value]) -> Result[T, SerddeError]:
+    return decode_as(value, DecodeTarget[T]())

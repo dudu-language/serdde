@@ -22,7 +22,7 @@ from serdde.macro_support import ok
 from serdde.macro_support import qname
 from serdde.macro_support import result_type
 from serdde.macro_support import self_reference
-from serdde.macro_support import value_reference
+from serdde.macro_support import value_reference_named
 from serdde.macro_support import value_type
 import dudu.ast as ast
 import serdde.convert
@@ -170,7 +170,10 @@ def and_expression(values: list[ast.Expression]) -> ast.Expression:
 def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     body: list[ast.Statement] = []
     names = GeneratedNames()
-    value = ast.name_expression("value")
+    for field in item.fields:
+        names.reserve(field.name)
+    input_name = names.take("input")
+    value = ast.name_expression(input_name)
     is_object = ast.binary_expression(
         member(value, "kind"),
         "!=",
@@ -328,7 +331,7 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
     body.append(ast.return_statement(ok(constructed)))
     return ast.FunctionDecl(
         name="serdde_deserialize",
-        parameters=[value_reference()],
+        parameters=[value_reference_named(input_name)],
         return_type=result_type(ast.named_type("Self")),
         body=body,
         is_static=True,

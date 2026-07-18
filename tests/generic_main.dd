@@ -1,0 +1,146 @@
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Box[T]:
+    value: T
+
+
+@derive(Serde)
+class Pair[T, U]:
+    first: T
+    second: U
+
+
+def test_box() -> i32:
+    encoded = to_value(Box[i32](value=42))
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[Box[i32]](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(box):
+                    return box.value - 42
+
+
+def test_nested_generics() -> i32:
+    source = Pair[str, Box[list[i32]]](
+        first="numbers",
+        second=Box[list[i32]](value=[2, 3, 5]),
+    )
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[Pair[str, Box[list[i32]]]](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(pair):
+                    if pair.first != "numbers":
+                        return 3
+                    if len(pair.second.value) != 3 or pair.second.value[2] != 5:
+                        return 4
+    return 0
+
+
+def test_generic_collections() -> i32:
+    items: list[Option[i32]] = []
+    items.append(2)
+    items.append(None)
+    items.append(5)
+    values: dict[str, list[Option[i32]]] = {}
+    values["primes"] = items
+    encoded = to_value(values)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[dict[str, list[Option[i32]]]](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(ready):
+                    items = ready.at("primes")
+                    if len(items) != 3:
+                        return 3
+                    if not items[0].has_value() or items[0].value() != 2:
+                        return 4
+                    if items[1].has_value():
+                        return 5
+
+    tags: set[str] = {"compiler", "serde"}
+    encoded_tags = to_value(tags)
+    match encoded_tags:
+        case Err(_):
+            return 6
+        case Ok(value):
+            decoded_tags = from_value[set[str]](value)
+            match decoded_tags:
+                case Err(_):
+                    return 7
+                case Ok(ready):
+                    if len(ready) != 2 or not ready.contains("serde"):
+                        return 8
+    return 0
+
+
+def test_generic_result() -> i32:
+    source: Result[Box[list[i32]], str] = Ok(Box[list[i32]](value=[7, 11]))
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[Result[Box[list[i32]], str]](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(result):
+                    match result:
+                        case Err(_):
+                            return 3
+                        case Ok(box):
+                            if len(box.value) != 2 or box.value[1] != 11:
+                                return 4
+
+    failure: Result[i32, str] = Err("nope")
+    encoded_failure = to_value(failure)
+    match encoded_failure:
+        case Err(_):
+            return 5
+        case Ok(value):
+            decoded_failure = from_value[Result[i32, str]](value)
+            match decoded_failure:
+                case Err(_):
+                    return 6
+                case Ok(result):
+                    match result:
+                        case Ok(_):
+                            return 7
+                        case Err(message):
+                            if message != "nope":
+                                return 8
+    return 0
+
+
+def main() -> i32:
+    status = test_box()
+    if status != 0:
+        return 10 + status
+    status = test_nested_generics()
+    if status != 0:
+        return 20 + status
+    status = test_generic_collections()
+    if status != 0:
+        return 40 + status
+    status = test_generic_result()
+    if status != 0:
+        return 60 + status
+    return 0

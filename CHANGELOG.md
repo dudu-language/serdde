@@ -22,3 +22,9 @@ All notable changes to Serdde are recorded here. The format follows
   internal, adjacent, and untagged representations. Variant aliases,
   directional skips, unknown-field policy, deterministic tag order, and
   collision-safe generated bindings are covered by executable fixtures.
+- Generic conversion entry points now support primitives, generic derived
+  classes, nested generic classes, lists, sets, string-keyed dictionaries,
+  `Option`, and both alternatives of `Result` through one ordinary Dudu
+  overload family. Nested conversion failures retain field and index paths.
+- Generated deserializers allocate hygienic input bindings around user field
+  names, including classes with fields named `value` or `input`.

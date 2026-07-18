@@ -1,0 +1,7 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class SkippedRequired:
+    @Serde(skip=True)
+    value: i32

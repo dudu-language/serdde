@@ -121,3 +121,9 @@ Serdde is implemented in Dudu. Native libraries may be used for optional
 adapters and benchmark comparisons, but the compiler must not recognize the
 library name or its types. A discovered language gap is reproduced with a
 neutral Dudu fixture and fixed generally in Dudu.
+
+External types use explicit adapter classes. Field adapters are selected with
+`@Serde(adapter="...")`; standalone values use `to_value_with` and
+`from_value_with`. This proved sufficient for imported C++ templates including
+`std.pair` without adding traits, compiler registries, orphan rules, or
+Serdde-specific lookup to Dudu.

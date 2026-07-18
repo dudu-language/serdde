@@ -1,5 +1,5 @@
-from serdde.macro_codec_decode import decode_statements
-from serdde.macro_codec_encode import encode_statements
+from serdde.macro_adapter import decode_field_statements
+from serdde.macro_adapter import encode_field_statements
 from serdde.macro_codec_support import ErrorContext
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_codec_support import contexts_with
@@ -47,6 +47,7 @@ class SerdeOptions:
     tag: str = ""
     content: str = ""
     untagged: bool = False
+    adapter: str = ""
 
 
 def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
@@ -73,8 +74,8 @@ def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
             ast.string_expression(field_name),
         )
         field_body: list[ast.Statement] = []
-        for statement in encode_statements(
-            field.type,
+        for statement in encode_field_statements(
+            field,
             source,
             value_name,
             contexts,
@@ -213,8 +214,8 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
                 "at_field",
                 ast.string_expression(field.name),
             )
-            for statement in decode_statements(
-                field.type,
+            for statement in decode_field_statements(
+                field,
                 value,
                 ready_name,
                 contexts,
@@ -275,8 +276,8 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
                 field.type,
                 field_default_expression(field),
             ))
-            decode_body = decode_statements(
-                field.type,
+            decode_body = decode_field_statements(
+                field,
                 field_lookup,
                 ready_name,
                 contexts,
@@ -296,8 +297,8 @@ def decode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
                     [ast.string_expression(field_name)],
                 )))],
             ))
-            for statement in decode_statements(
-                field.type,
+            for statement in decode_field_statements(
+                field,
                 field_lookup,
                 field.name,
                 contexts,

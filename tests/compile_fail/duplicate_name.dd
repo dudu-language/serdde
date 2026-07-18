@@ -1,0 +1,9 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class DuplicateName:
+    value: i32
+
+    @Serde(rename="value")
+    other: i32

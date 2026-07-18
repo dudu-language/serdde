@@ -42,3 +42,7 @@ kind = "executable"
 [targets.dson]
 entry = "tests/dson_main.dd"
 kind = "executable"
+
+[targets.adapters]
+entry = "tests/adapter_main.dd"
+kind = "executable"

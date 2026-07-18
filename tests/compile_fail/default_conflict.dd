@@ -1,0 +1,7 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class DefaultConflict:
+    @Serde(default=True, default_with="make_value")
+    value: i32

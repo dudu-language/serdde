@@ -1,0 +1,7 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+@Serde(rename_all="LOUD")
+class InvalidRename:
+    value: i32

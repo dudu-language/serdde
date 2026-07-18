@@ -1,4 +1,4 @@
-from serdde.macro_codec_encode import encode_statements
+from serdde.macro_adapter import encode_field_statements
 from serdde.macro_codec_support import ErrorContext
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_codec_support import contexts_with
@@ -45,7 +45,7 @@ def payload_statements(
         ready_name = names.take("payload_ready")
         contexts: list[ErrorContext] = []
         contexts = contexts_with(contexts, "at_field", ast.string_expression(field_name))
-        field_body = encode_statements(field.type, source, ready_name, contexts, names)
+        field_body = encode_field_statements(field, source, ready_name, contexts, names)
         if bool_option(field.attributes, "flatten", False):
             flattened = ast.name_expression(ready_name)
             not_object = ast.binary_expression(

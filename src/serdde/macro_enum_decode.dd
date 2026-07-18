@@ -1,4 +1,4 @@
-from serdde.macro_codec_decode import decode_statements
+from serdde.macro_adapter import decode_field_statements
 from serdde.macro_codec_support import ErrorContext
 from serdde.macro_codec_support import GeneratedNames
 from serdde.macro_codec_support import contexts_with
@@ -106,8 +106,8 @@ def decode_payload_method(
             ready_name = names.take("decoded_" + field.name)
             contexts: list[ErrorContext] = []
             contexts = contexts_with(contexts, "at_field", ast.string_expression(field.name))
-            append_statements(body, decode_statements(
-                field.type,
+            append_statements(body, decode_field_statements(
+                field,
                 value,
                 ready_name,
                 contexts,
@@ -165,8 +165,8 @@ def decode_payload_method(
                 field.type,
                 field_default_expression(field),
             ))
-            decode_body = decode_statements(
-                field.type,
+            decode_body = decode_field_statements(
+                field,
                 field_lookup,
                 ready_name,
                 contexts,
@@ -186,8 +186,8 @@ def decode_payload_method(
                     [ast.string_expression(field_name)],
                 )))],
             ))
-            append_statements(body, decode_statements(
-                field.type,
+            append_statements(body, decode_field_statements(
+                field,
                 field_lookup,
                 field.name,
                 contexts,

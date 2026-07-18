@@ -1,0 +1,13 @@
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Inner:
+    value: i32
+
+
+@derive(Serde)
+@Serde(deny_unknown_fields=True)
+class FlattenUnknown:
+    @Serde(flatten=True)
+    inner: Inner

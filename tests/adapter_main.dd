@@ -1,0 +1,114 @@
+from cpp import string
+from cpp import utility
+from serdde.convert import decode_i32
+from serdde.convert import decode_str
+from serdde.convert import from_value
+from serdde.convert import from_value_with
+from serdde.convert import to_value
+from serdde.convert import to_value_with
+from serdde.error import SerddeError
+from serdde.error import missing_field_error
+from serdde.error import type_error
+from serdde.macros import Serde
+from serdde.value import Value
+from serdde.value import ValueKind
+from serdde.value import empty_object_value
+from serdde.value import i64_value
+from serdde.value import string_value
+
+
+class PairSerde:
+    def serialize(
+        value: &const[std.pair[std.string, i32]],
+    ) -> Result[Value, SerddeError]:
+        output = empty_object_value()
+        output.set_field("name", string_value(value.first))
+        output.set_field("score", i64_value(i64(value.second)))
+        return Ok(output)
+
+    def deserialize(
+        value: &const[Value],
+    ) -> Result[std.pair[std.string, i32], SerddeError]:
+        if value.kind != ValueKind.Object:
+            return Err(type_error("expected pair object"))
+        if not value.has_field("name"):
+            return Err(missing_field_error("name"))
+        if not value.has_field("score"):
+            return Err(missing_field_error("score"))
+        name_result = decode_str(value.field("name"))
+        name: str = ""
+        match name_result:
+            case Err(error):
+                return Err(error.at_field("name"))
+            case Ok(ready):
+                name = ready
+        score_result = decode_i32(value.field("score"))
+        score: i32 = 0
+        match score_result:
+            case Err(error):
+                return Err(error.at_field("score"))
+            case Ok(ready):
+                score = ready
+        return Ok(std.make_pair(std.string(name), score))
+
+
+@derive(Serde)
+class NativeEnvelope:
+    id: u64
+
+    @Serde(adapter="PairSerde")
+    entry: std.pair[std.string, i32]
+
+
+@derive(Serde)
+enum NativeEvent:
+    Pair:
+        @Serde(adapter="PairSerde")
+        entry: std.pair[std.string, i32]
+
+
+def main() -> i32:
+    pair: std.pair[std.string, i32] = std.make_pair(std.string("Ada"), 42)
+    direct = to_value_with[std.pair[std.string, i32], PairSerde](pair)
+    match direct:
+        case Err(_):
+            return 1
+        case Ok(value):
+            restored = from_value_with[std.pair[std.string, i32], PairSerde](value)
+            match restored:
+                case Err(_):
+                    return 2
+                case Ok(ready):
+                    if ready.first != "Ada" or ready.second != 42:
+                        return 3
+
+    envelope = NativeEnvelope(id=7, entry=pair)
+    encoded = to_value(envelope)
+    match encoded:
+        case Err(_):
+            return 4
+        case Ok(value):
+            decoded = from_value[NativeEnvelope](value)
+            match decoded:
+                case Err(_):
+                    return 5
+                case Ok(ready):
+                    if ready.entry.first != "Ada" or ready.entry.second != 42:
+                        return 6
+
+    event = NativeEvent.Pair(entry=pair)
+    encoded_event = to_value(event)
+    match encoded_event:
+        case Err(_):
+            return 7
+        case Ok(value):
+            decoded_event = from_value[NativeEvent](value)
+            match decoded_event:
+                case Err(_):
+                    return 8
+                case Ok(ready):
+                    match ready:
+                        case NativeEvent.Pair(entry):
+                            if entry.first != "Ada" or entry.second != 42:
+                                return 9
+    return 0

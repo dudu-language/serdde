@@ -498,3 +498,11 @@ def decode_as[T](value: &const[Value], target: DecodeTarget[T]) -> Result[T, Ser
 
 def from_value[T](value: &const[Value]) -> Result[T, SerddeError]:
     return decode_as(value, DecodeTarget[T]())
+
+
+def to_value_with[T, Adapter](value: &const[T]) -> Result[Value, SerddeError]:
+    return Adapter.serialize(value)
+
+
+def from_value_with[T, Adapter](value: &const[Value]) -> Result[T, SerddeError]:
+    return Adapter.deserialize(value)

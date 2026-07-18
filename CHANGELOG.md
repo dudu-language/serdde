@@ -11,6 +11,12 @@ All notable changes to Serdde are recorded here. The format follows
 - Format-neutral `Value` representation with ordered objects.
 - Structured errors with value paths and source locations.
 - Strict JSON parsing and deterministic JSON writing.
+- Typed JSON `loads[T]` and `dumps[T]`, exact numeric boundaries, UTF-8
+  validation, nesting limits, and source-aware conversion errors.
+- DSON, a deterministic typed text format that preserves every `ValueKind` and
+  proves derived codecs are independent of JSON.
+- Explicit field and top-level adapters for imported and third-party types,
+  validated with an imported C++ `std.pair`.
 - Checked primitive conversion and generic handwritten codec contracts.
 - Public typed derives for classes with nested derived fields, lists, sets,
   string-keyed dictionaries, `Option`, `Result`, and arbitrary-rank fixed

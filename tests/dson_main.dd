@@ -22,6 +22,48 @@ class DsonRecord:
     samples: list[f64]
 
 
+@derive(Serde)
+class DsonAddress:
+    city: str
+
+
+@derive(Serde)
+class DsonFlattened:
+    id: i32
+
+    @Serde(flatten=True)
+    address: DsonAddress
+
+
+@derive(Serde)
+@Serde(untagged=True)
+enum DsonChoice:
+    Empty
+    Name:
+        name: str
+    Count:
+        count: i32
+
+
+def is_zero(value: i32) -> bool:
+    return value == 0
+
+
+@derive(Serde)
+@Serde(rename_all="camelCase", deny_unknown_fields=True)
+class DsonConfigured:
+    player_id: u64
+
+    @Serde(rename="displayName", alias=["name"])
+    display_name: str
+
+    @Serde(default=True)
+    score: i32
+
+    @Serde(skip_if="is_zero", default=True)
+    hidden_when_zero: i32
+
+
 def rejected(source: str) -> bool:
     result = parse_dson(source)
     match result:
@@ -36,7 +78,57 @@ def fail(name: str, code: i32) -> i32:
     return code
 
 
+def test_direct_features() -> i32:
+    flattened = DsonFlattened(id=3, address=DsonAddress(city="Paris"))
+    flattened_text = dumps(flattened)
+    if not flattened_text.ok:
+        return fail("direct flatten write", 1)
+    flattened_ready = loads[DsonFlattened](flattened_text.value)
+    if not flattened_ready.ok:
+        return fail("direct flatten read", 2)
+    if flattened_ready.value.id != 3 or flattened_ready.value.address.city != "Paris":
+        return fail("direct flatten fields", 3)
+
+    untagged_text = dumps(DsonChoice.Count(count=11))
+    if not untagged_text.ok:
+        return fail("direct untagged write", 4)
+    untagged_ready = loads[DsonChoice](untagged_text.value)
+    if not untagged_ready.ok:
+        return fail("direct untagged read", 5)
+    match untagged_ready.value:
+        case DsonChoice.Count(count):
+            if count != 11:
+                return fail("direct untagged payload", 6)
+        case _:
+            return fail("direct untagged variant", 7)
+
+    configured_source = "obj(2:{str(8:playerId)=u64(9),str(4:name)=str(3:Ada)})"
+    configured = loads[DsonConfigured](configured_source)
+    if not configured.ok:
+        return fail("direct configured read", 8)
+    if configured.value.player_id != 9 or configured.value.display_name != "Ada":
+        return fail("direct rename and alias", 9)
+    if configured.value.score != 0 or configured.value.hidden_when_zero != 0:
+        return fail("direct defaults", 10)
+    configured_text = dumps(configured.value)
+    if not configured_text.ok:
+        return fail("direct configured write", 11)
+    expected = "obj(3:{str(8:playerId)=u64(9),str(11:displayName)=str(3:Ada),str(5:score)=i64(0)})"
+    if configured_text.value != expected:
+        return fail("direct conditional field", 12)
+
+    unknown = loads[DsonConfigured](
+        "obj(3:{str(8:playerId)=u64(9),str(11:displayName)=str(3:Ada),str(5:extra)=i64(1)})",
+    )
+    if unknown.ok or unknown.err.path_string() != "$.extra":
+        return fail("direct unknown field", 13)
+    return 0
+
+
 def main() -> i32:
+    direct_status = test_direct_features()
+    if direct_status != 0:
+        return 20 + direct_status
     root = empty_object_value()
     root.set_field("null", Value())
     root.set_field("bool", bool_value(True))

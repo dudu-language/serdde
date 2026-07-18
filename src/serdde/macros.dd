@@ -15,7 +15,7 @@ from serdde.macro_enum_direct_decode import enum_decode_methods
 from serdde.macro_enum_direct_encode import enum_encode_method
 from serdde.macro_enum_support import validate_enum
 import dudu.ast as ast
-import serdde.convert
+import serdde.defaults
 import serdde.error
 import serdde.protocol
 import serdde.variant_support
@@ -143,7 +143,7 @@ def validate_class(item: &const[ast.ClassDecl], out: &ast.Expansion):
 
 
 def runtime_imports(out: &ast.Expansion):
-    out.require_module("serdde.convert", "_serdde_convert")
+    out.require_module("serdde.defaults", "_serdde_defaults")
     out.require_module("serdde.error", "_serdde_error")
     out.require_module("serdde.protocol", "_serdde_protocol")
     out.require_module("serdde.variant_support", "_serdde_variant")

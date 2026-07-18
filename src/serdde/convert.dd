@@ -16,17 +16,6 @@ from serdde.value_backend import ValueReader
 from serdde.value_backend import ValueWriter
 
 
-def dict_keys[T](values: &const[dict[str, T]]) -> list[str]:
-    result: list[str] = []
-    for key in values:
-        result.append(key)
-    return result
-
-
-def default_value[T]() -> T:
-    return T()
-
-
 def encode_bool(value: bool) -> Value:
     return bool_value(value)
 

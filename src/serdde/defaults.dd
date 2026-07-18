@@ -1,0 +1,2 @@
+def default_value[T]() -> T:
+    return T()

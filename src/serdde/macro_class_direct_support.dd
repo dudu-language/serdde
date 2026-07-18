@@ -61,7 +61,7 @@ def field_default_expression(field: &const[ast.FieldDecl]) -> ast.Expression:
     if default_with != "":
         return ast.call_expression(path_expression(default_with), [])
     return ast.template_call_expression(
-        ast.member_expression(ast.name_expression("_serdde_convert"), "default_value"),
+        ast.member_expression(ast.name_expression("_serdde_defaults"), "default_value"),
         [field.type],
         [],
     )

@@ -1,9 +1,9 @@
-from serdde.macro_class_direct import canonical_encode_fields_method
-from serdde.macro_class_direct import decode_method as direct_decode_method
-from serdde.macro_class_direct import encode_fields_method
-from serdde.macro_class_direct import encode_method as direct_encode_method
-from serdde.macro_class_direct import field_count_method
-from serdde.macro_class_direct import field_has_default
+from serdde.macro_class_direct_decode import decode_method as direct_decode_method
+from serdde.macro_class_direct_encode import canonical_encode_fields_method
+from serdde.macro_class_direct_encode import encode_fields_method
+from serdde.macro_class_direct_encode import encode_method as direct_encode_method
+from serdde.macro_class_direct_encode import field_count_method
+from serdde.macro_class_direct_support import field_has_default
 from serdde.macro_codec_support import validate_codec_type
 from serdde.macro_config import bool_option
 from serdde.macro_config import int_option

@@ -555,3 +555,16 @@ def deserialize_as[Reader, T](
 
 def deserialize_from[T, Reader](input: &const[Reader]) -> Result[T, SerddeError]:
     return deserialize_as(input, DecodeTarget[T]())
+
+
+def serialize_with_to[Writer, T, Adapter](
+    value: &const[T],
+    output: &Writer,
+) -> Result[bool, SerddeError]:
+    return Adapter.serialize[Writer](value, output)
+
+
+def deserialize_with_from[T, Reader, Adapter](
+    input: &const[Reader],
+) -> Result[T, SerddeError]:
+    return Adapter.deserialize[Reader](input)

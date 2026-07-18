@@ -4,7 +4,9 @@ from serdde.error import syntax_error
 from serdde.json_parser import parse_json
 from serdde.json_writer import write_json
 from serdde.protocol import deserialize_from
+from serdde.protocol import deserialize_with_from
 from serdde.protocol import serialize_to
+from serdde.protocol import serialize_with_to
 from serdde.value import Value
 
 
@@ -24,6 +26,18 @@ def loads[T](source: &const[str]) -> Result[T, SerddeError]:
     return deserialize_from[T, serdde_wire.JsonReader](input)
 
 
+def loads_with[T, Adapter](source: &const[str]) -> Result[T, SerddeError]:
+    input = serdde_wire.JsonReader(source)
+    if not input.valid():
+        return Err(syntax_error(
+            input.error_message(),
+            input.line(),
+            input.column(),
+            input.offset(),
+        ).with_format("json"))
+    return deserialize_with_from[T, serdde_wire.JsonReader, Adapter](input)
+
+
 def dumps_value(value: &const[Value]) -> Result[str, SerddeError]:
     encoded = write_json(value)
     match encoded:
@@ -41,12 +55,31 @@ def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
     return Ok(output.take_output())
 
 
+def dumps_with[T, Adapter](value: &const[T]) -> Result[str, SerddeError]:
+    output = serdde_wire.JsonWriter()
+    encoded = serialize_with_to[serdde_wire.JsonWriter, T, Adapter](value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("json"))
+    return Ok(output.take_output())
+
+
 def dumps_into[T](
     value: &const[T],
     destination: &str,
 ) -> Result[bool, SerddeError]:
     output = serdde_wire.JsonWriter(destination)
     encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("json"))
+    return Ok(True)
+
+
+def dumps_into_with[T, Adapter](
+    value: &const[T],
+    destination: &str,
+) -> Result[bool, SerddeError]:
+    output = serdde_wire.JsonWriter(destination)
+    encoded = serialize_with_to[serdde_wire.JsonWriter, T, Adapter](value, output)
     if not encoded.ok:
         return Err(encoded.err.with_format("json"))
     return Ok(True)

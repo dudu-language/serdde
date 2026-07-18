@@ -1,0 +1,96 @@
+from serdde.macro_config import bool_option
+from serdde.macro_config import path_expression
+from serdde.macro_config import string_option
+from serdde.macro_support import call
+from serdde.macro_support import err
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import result_type
+import dudu.ast as ast
+
+
+def writer_parameter() -> ast.Parameter:
+    return ast.Parameter(
+        name="output",
+        type=ast.reference_type(ast.named_type("Writer")),
+    )
+
+
+def reader_parameter(name: str) -> ast.Parameter:
+    return ast.Parameter(
+        name=name,
+        type=ast.reference_type(ast.const_type(ast.named_type("Reader"))),
+    )
+
+
+def bool_result() -> ast.TypeRef:
+    return result_type(ast.named_type("bool"))
+
+
+def protocol_call(name: str, arguments: list[ast.Expression]) -> ast.Expression:
+    return call("_serdde_protocol", name, arguments)
+
+
+def failed_result(result: ast.Expression) -> ast.Expression:
+    return ast.unary_expression("not", member(result, "ok"))
+
+
+def return_result_error(result: ast.Expression, field: ast.Expression) -> ast.Statement:
+    error = method(member(result, "err"), "at_field", [field])
+    return ast.return_statement(err(error))
+
+
+def checked_write(
+    expression: ast.Expression,
+    result_name: str,
+    field: ast.Expression,
+) -> list[ast.Statement]:
+    result: list[ast.Statement] = []
+    result.append(ast.variable_statement(result_name, bool_result(), expression))
+    result.append(ast.if_statement(
+        failed_result(ast.name_expression(result_name)),
+        [return_result_error(ast.name_expression(result_name), field)],
+    ))
+    return result
+
+
+def field_default_expression(field: &const[ast.FieldDecl]) -> ast.Expression:
+    if field.value.has_value():
+        return field.value.value()
+    default_with = string_option(field.attributes, "default_with", "")
+    if default_with != "":
+        return ast.call_expression(path_expression(default_with), [])
+    return ast.template_call_expression(
+        ast.member_expression(ast.name_expression("_serdde_convert"), "default_value"),
+        [field.type],
+        [],
+    )
+
+
+def field_has_default(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        field.value.has_value()
+        or bool_option(field.attributes, "default", False)
+        or string_option(field.attributes, "default_with", "") != ""
+    )
+
+
+def skipped_for_encode(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        bool_option(field.attributes, "skip", False)
+        or bool_option(field.attributes, "skip_serializing", False)
+    )
+
+
+def skipped_for_decode(field: &const[ast.FieldDecl]) -> bool:
+    return (
+        bool_option(field.attributes, "skip", False)
+        or bool_option(field.attributes, "skip_deserializing", False)
+    )
+
+
+def has_flattened_field(item: &const[ast.ClassDecl]) -> bool:
+    for field in item.fields:
+        if not skipped_for_encode(field) and bool_option(field.attributes, "flatten", False):
+            return True
+    return False

@@ -1,12 +1,21 @@
 from cpp import string
 from cpp import utility
+from serdde.cbor import dumps_into_with as dumps_cbor_into_with
+from serdde.cbor import dumps_with as dumps_cbor_with
+from serdde.cbor import loads_with as loads_cbor_with
 from serdde.convert import from_value
 from serdde.convert import from_value_with
 from serdde.convert import to_value
 from serdde.convert import to_value_with
+from serdde.dson import dumps_into_with as dumps_dson_into_with
+from serdde.dson import dumps_with as dumps_dson_with
+from serdde.dson import loads_with as loads_dson_with
 from serdde.error import SerddeError
 from serdde.json import dumps
+from serdde.json import dumps_into_with as dumps_json_into_with
+from serdde.json import dumps_with as dumps_json_with
 from serdde.json import loads
+from serdde.json import loads_with as loads_json_with
 from serdde.macros import Serde
 from serdde.protocol import deserialize_from
 from serdde.protocol import reader_error
@@ -70,8 +79,52 @@ enum NativeEvent:
         entry: std.pair[std.string, i32]
 
 
+def test_direct_top_level_adapter(
+    pair: &const[std.pair[std.string, i32]],
+) -> i32:
+    json = dumps_json_with[std.pair[std.string, i32], PairSerde](pair)
+    if not json.ok or json.value != "{\"name\":\"Ada\",\"score\":42}":
+        return 1
+    json_ready = loads_json_with[std.pair[std.string, i32], PairSerde](json.value)
+    if not json_ready.ok or json_ready.value.first != "Ada" or json_ready.value.second != 42:
+        return 2
+    json_reused = "old"
+    if not dumps_json_into_with[std.pair[std.string, i32], PairSerde](pair, json_reused).ok:
+        return 3
+    if json_reused != json.value:
+        return 4
+
+    cbor = dumps_cbor_with[std.pair[std.string, i32], PairSerde](pair)
+    if not cbor.ok:
+        return 5
+    cbor_ready = loads_cbor_with[std.pair[std.string, i32], PairSerde](cbor.value)
+    if not cbor_ready.ok or cbor_ready.value.first != "Ada" or cbor_ready.value.second != 42:
+        return 6
+    cbor_reused = "old"
+    if not dumps_cbor_into_with[std.pair[std.string, i32], PairSerde](pair, cbor_reused).ok:
+        return 7
+    if cbor_reused != cbor.value:
+        return 8
+
+    dson = dumps_dson_with[std.pair[std.string, i32], PairSerde](pair)
+    if not dson.ok:
+        return 9
+    dson_ready = loads_dson_with[std.pair[std.string, i32], PairSerde](dson.value)
+    if not dson_ready.ok or dson_ready.value.first != "Ada" or dson_ready.value.second != 42:
+        return 10
+    dson_reused = "old"
+    if not dumps_dson_into_with[std.pair[std.string, i32], PairSerde](pair, dson_reused).ok:
+        return 11
+    if dson_reused != dson.value:
+        return 12
+    return 0
+
+
 def main() -> i32:
     pair: std.pair[std.string, i32] = std.make_pair(std.string("Ada"), 42)
+    direct_status = test_direct_top_level_adapter(pair)
+    if direct_status != 0:
+        return 20 + direct_status
     direct = to_value_with[std.pair[std.string, i32], PairSerde](pair)
     match direct:
         case Err(_):

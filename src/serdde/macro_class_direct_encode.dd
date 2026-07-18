@@ -1,0 +1,267 @@
+from serdde.macro_class_direct_support import bool_result
+from serdde.macro_class_direct_support import checked_write
+from serdde.macro_class_direct_support import failed_result
+from serdde.macro_class_direct_support import has_flattened_field
+from serdde.macro_class_direct_support import protocol_call
+from serdde.macro_class_direct_support import skipped_for_encode
+from serdde.macro_class_direct_support import writer_parameter
+from serdde.macro_codec_support import GeneratedNames
+from serdde.macro_config import bool_option
+from serdde.macro_config import int_option
+from serdde.macro_config import path_expression
+from serdde.macro_config import serialized_name
+from serdde.macro_config import string_option
+from serdde.macro_support import member
+from serdde.macro_support import method
+from serdde.macro_support import ok
+from serdde.macro_support import self_reference
+import dudu.ast as ast
+
+
+def field_count_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    fixed: usize = 0
+    for field in item.fields:
+        if skipped_for_encode(field):
+            continue
+        if not bool_option(field.attributes, "flatten", False):
+            fixed += 1
+    body.append(ast.variable_statement(
+        "count",
+        ast.named_type("usize"),
+        ast.int_expression(str(fixed)),
+    ))
+    for field in item.fields:
+        if skipped_for_encode(field):
+            continue
+        source = member(ast.name_expression("self"), field.name)
+        if bool_option(field.attributes, "flatten", False):
+            body.append(ast.compound_assignment_statement(
+                ast.name_expression("count"),
+                "+=",
+                method(source, "serdde_field_count", []),
+            ))
+            continue
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if != "":
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(
+                predicate,
+                [ast.compound_assignment_statement(
+                    ast.name_expression("count"),
+                    "-=",
+                    ast.int_expression("1"),
+                )],
+            ))
+    body.append(ast.return_statement(ast.name_expression("count")))
+    return ast.FunctionDecl(
+        name="serdde_field_count",
+        parameters=[self_reference()],
+        return_type=ast.named_type("usize"),
+        body=body,
+    )
+
+
+def encode_one_field(
+    field: &const[ast.FieldDecl],
+    field_name: str,
+    compact: bool,
+    names: &GeneratedNames,
+) -> list[ast.Statement]:
+    source = member(ast.name_expression("self"), field.name)
+    encoded_name = names.take("encoded")
+    serialized_name_expr = ast.string_expression(field_name)
+    if bool_option(field.attributes, "flatten", False):
+        return checked_write(
+            method(source, "serdde_serialize_fields", [ast.name_expression("output")]),
+            encoded_name,
+            ast.string_expression(field.name),
+        )
+    result: list[ast.Statement] = []
+    field_result = names.take("field")
+    field_method = "write_field"
+    field_arguments: list[ast.Expression] = [serialized_name_expr]
+    if compact:
+        field_method = "write_field_id"
+        field_arguments.append(ast.call_expression(
+            ast.name_expression("u64"),
+            [ast.int_expression(str(int_option(field.attributes, "id", -1)))],
+        ))
+    for statement in checked_write(
+        protocol_call(
+            "write_ok",
+            [
+                ast.name_expression("output"),
+                method(
+                    ast.name_expression("output"),
+                    field_method,
+                    field_arguments,
+                ),
+            ],
+        ),
+        field_result,
+        serialized_name_expr,
+    ):
+        result.append(statement)
+    adapter = string_option(field.attributes, "adapter", "")
+    expression = ast.Expression()
+    if adapter == "":
+        expression = protocol_call(
+            "serialize_to",
+            [source, ast.name_expression("output")],
+        )
+    else:
+        expression = ast.template_call_expression(
+            member(path_expression(adapter), "serialize"),
+            [ast.named_type("Writer")],
+            [source, ast.name_expression("output")],
+        )
+    for statement in checked_write(expression, encoded_name, serialized_name_expr):
+        result.append(statement)
+    return result
+
+
+def canonical_before(
+    left: &const[ast.FieldDecl],
+    right: &const[ast.FieldDecl],
+    compact: bool,
+    rename_all: str,
+) -> bool:
+    if compact:
+        return int_option(left.attributes, "id", -1) < int_option(right.attributes, "id", -1)
+    left_name = serialized_name(left.name, left.attributes, rename_all)
+    right_name = serialized_name(right.name, right.attributes, rename_all)
+    if len(left_name) != len(right_name):
+        return len(left_name) < len(right_name)
+    return left_name < right_name
+
+
+def ordered_fields(
+    item: &const[ast.ClassDecl],
+    canonical: bool,
+) -> list[ast.FieldDecl]:
+    result: list[ast.FieldDecl] = []
+    compact = bool_option(item.attributes, "compact", False)
+    rename_all = string_option(item.attributes, "rename_all", "")
+    for field in item.fields:
+        result.append(field)
+        if canonical:
+            index = len(result) - 1
+            while index > 0 and canonical_before(
+                result[index],
+                result[index - 1],
+                compact,
+                rename_all,
+            ):
+                previous = result[index - 1]
+                result[index - 1] = result[index]
+                result[index] = previous
+                index -= 1
+    return result
+
+
+def make_encode_fields_method(
+    item: &const[ast.ClassDecl],
+    name: str,
+    canonical: bool,
+) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    names = GeneratedNames()
+    rename_all = string_option(item.attributes, "rename_all", "")
+    compact = bool_option(item.attributes, "compact", False)
+    for field in ordered_fields(item, canonical):
+        if skipped_for_encode(field):
+            continue
+        field_name = serialized_name(field.name, field.attributes, rename_all)
+        field_body = encode_one_field(field, field_name, compact, names)
+        skip_if = string_option(field.attributes, "skip_if", "")
+        if skip_if == "":
+            for statement in field_body:
+                body.append(statement)
+        else:
+            source = member(ast.name_expression("self"), field.name)
+            predicate = ast.call_expression(path_expression(skip_if), [source])
+            body.append(ast.if_statement(ast.unary_expression("not", predicate), field_body))
+    body.append(ast.return_statement(ok(ast.bool_expression(True))))
+    return ast.FunctionDecl(
+        name=name,
+        generic_parameters=[ast.generic_parameter("Writer")],
+        parameters=[self_reference(), writer_parameter()],
+        return_type=bool_result(),
+        body=body,
+    )
+
+
+def encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    return make_encode_fields_method(item, "serdde_serialize_fields", False)
+
+
+def canonical_encode_fields_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    return make_encode_fields_method(item, "serdde_serialize_fields_canonical", True)
+
+
+def encode_object_body(begin_method: str, fields_method: str) -> list[ast.Statement]:
+    body: list[ast.Statement] = []
+    started = protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(
+                ast.name_expression("output"),
+                begin_method,
+                [method(ast.name_expression("self"), "serdde_field_count", [])],
+            ),
+        ],
+    )
+    body.append(ast.variable_statement("started", bool_result(), started))
+    body.append(ast.if_statement(
+        failed_result(ast.name_expression("started")),
+        [ast.return_statement(ast.name_expression("started"))],
+    ))
+    body.append(ast.variable_statement(
+        "fields",
+        bool_result(),
+        method(
+            ast.name_expression("self"),
+            fields_method,
+            [ast.name_expression("output")],
+        ),
+    ))
+    body.append(ast.if_statement(
+        failed_result(ast.name_expression("fields")),
+        [ast.return_statement(ast.name_expression("fields"))],
+    ))
+    body.append(ast.return_statement(protocol_call(
+        "write_ok",
+        [
+            ast.name_expression("output"),
+            method(ast.name_expression("output"), "end_object", []),
+        ],
+    )))
+    return body
+
+
+def encode_method(item: &const[ast.ClassDecl]) -> ast.FunctionDecl:
+    body: list[ast.Statement] = []
+    begin_method = "begin_object"
+    if has_flattened_field(item):
+        begin_method = "begin_object_checked"
+    elif bool_option(item.attributes, "compact", False):
+        begin_method = "begin_object_compact"
+    if not has_flattened_field(item):
+        ordered_begin = "begin_object_ordered"
+        if bool_option(item.attributes, "compact", False):
+            ordered_begin = "begin_object_compact_ordered"
+        body.append(ast.if_statement(
+            method(ast.name_expression("output"), "canonical_object_order", []),
+            encode_object_body(ordered_begin, "serdde_serialize_fields_canonical"),
+        ))
+    for statement in encode_object_body(begin_method, "serdde_serialize_fields"):
+        body.append(statement)
+    return ast.FunctionDecl(
+        name="serdde_serialize",
+        generic_parameters=[ast.generic_parameter("Writer")],
+        parameters=[self_reference(), writer_parameter()],
+        return_type=bool_result(),
+        body=body,
+    )

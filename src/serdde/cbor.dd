@@ -4,8 +4,10 @@ from serdde.error import SerddeError
 from serdde.error import syntax_error
 from serdde.error import type_error
 from serdde.protocol import deserialize_from
+from serdde.protocol import deserialize_with_from
 from serdde.protocol import reader_error
 from serdde.protocol import serialize_to
+from serdde.protocol import serialize_with_to
 from serdde.protocol import write_ok
 from serdde.value import Value
 from serdde.value import ValueKind
@@ -95,9 +97,29 @@ def loads[T](source: &const[str]) -> Result[T, SerddeError]:
     return deserialize_from[T, serdde_wire.CborReader](input)
 
 
+def loads_with[T, Adapter](source: &const[str]) -> Result[T, SerddeError]:
+    input = serdde_wire.CborReader(source)
+    if not input.valid():
+        return Err(syntax_error(
+            input.error_message(),
+            input.line(),
+            input.column(),
+            input.offset(),
+        ).with_format("cbor"))
+    return deserialize_with_from[T, serdde_wire.CborReader, Adapter](input)
+
+
 def dumps[T](value: &const[T]) -> Result[str, SerddeError]:
     output = serdde_wire.CborWriter()
     encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("cbor"))
+    return Ok(output.take_output())
+
+
+def dumps_with[T, Adapter](value: &const[T]) -> Result[str, SerddeError]:
+    output = serdde_wire.CborWriter()
+    encoded = serialize_with_to[serdde_wire.CborWriter, T, Adapter](value, output)
     if not encoded.ok:
         return Err(encoded.err.with_format("cbor"))
     return Ok(output.take_output())
@@ -159,6 +181,17 @@ def dumps_into[T](
 ) -> Result[bool, SerddeError]:
     output = serdde_wire.CborWriter(destination)
     encoded = serialize_to(value, output)
+    if not encoded.ok:
+        return Err(encoded.err.with_format("cbor"))
+    return Ok(True)
+
+
+def dumps_into_with[T, Adapter](
+    value: &const[T],
+    destination: &str,
+) -> Result[bool, SerddeError]:
+    output = serdde_wire.CborWriter(destination)
+    encoded = serialize_with_to[serdde_wire.CborWriter, T, Adapter](value, output)
     if not encoded.ok:
         return Err(encoded.err.with_format("cbor"))
     return Ok(True)

@@ -1,0 +1,83 @@
+from serdde.convert import from_value
+from serdde.convert import to_value
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class Tree:
+    name: str
+    children: list[Tree]
+
+
+@derive(Serde)
+enum Expr:
+    Number:
+        value: i32
+    Sum:
+        terms: list[Expr]
+
+
+def test_recursive_class() -> i32:
+    leaves: list[Tree] = [
+        Tree(name="left", children=[]),
+        Tree(name="right", children=[Tree(name="deep", children=[])]),
+    ]
+    source = Tree(name="root", children=leaves)
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[Tree](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(tree):
+                    if tree.name != "root" or len(tree.children) != 2:
+                        return 3
+                    if tree.children[1].children[0].name != "deep":
+                        return 4
+    return 0
+
+
+def test_recursive_enum() -> i32:
+    inner: list[Expr] = [Expr.Number(value=2), Expr.Number(value=3)]
+    outer: list[Expr] = [Expr.Sum(terms=inner), Expr.Number(value=5)]
+    source = Expr.Sum(terms=outer)
+    encoded = to_value(source)
+    match encoded:
+        case Err(_):
+            return 1
+        case Ok(value):
+            decoded = from_value[Expr](value)
+            match decoded:
+                case Err(_):
+                    return 2
+                case Ok(expr):
+                    match expr:
+                        case Expr.Sum(terms):
+                            if len(terms) != 2:
+                                return 3
+                            match terms[0]:
+                                case Expr.Sum(nested):
+                                    if len(nested) != 2:
+                                        return 4
+                                    match nested[1]:
+                                        case Expr.Number(number):
+                                            return number - 3
+                                        case _:
+                                            return 5
+                                case _:
+                                    return 6
+                        case _:
+                            return 7
+
+
+def main() -> i32:
+    status = test_recursive_class()
+    if status != 0:
+        return 10 + status
+    status = test_recursive_enum()
+    if status != 0:
+        return 20 + status
+    return 0

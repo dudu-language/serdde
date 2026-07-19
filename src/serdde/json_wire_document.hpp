@@ -17,8 +17,9 @@ using JsonObjectEntry = std::pair<yyjson_val *, yyjson_val *>;
 using JsonObjectIndex =
     std::unordered_map<yyjson_val *, std::vector<JsonObjectEntry>>;
 
-inline bool validate_json_tree(yyjson_val *value, std::size_t depth,
-                               std::string &error,
+inline bool validate_json_tree(yyjson_val *value, yyjson_val *root,
+                               std::string_view source, std::size_t depth,
+                               std::string &error, std::size_t &error_offset,
                                JsonObjectIndex &object_index) {
   if (depth > 128) {
     error = "JSON nesting depth exceeds 128";
@@ -27,8 +28,8 @@ inline bool validate_json_tree(yyjson_val *value, std::size_t depth,
   if (yyjson_is_arr(value)) {
     const std::size_t size = yyjson_arr_size(value);
     for (std::size_t index = 0; index < size; ++index) {
-      if (!validate_json_tree(yyjson_arr_get(value, index), depth + 1, error,
-                              object_index)) {
+      if (!validate_json_tree(yyjson_arr_get(value, index), root, source,
+                              depth + 1, error, error_offset, object_index)) {
         return false;
       }
     }
@@ -49,13 +50,28 @@ inline bool validate_json_tree(yyjson_val *value, std::size_t depth,
     yyjson_val *child = yyjson_obj_iter_get_val(key);
     keys.emplace_back(yyjson_get_str(key), yyjson_get_len(key));
     entries.emplace_back(key, child);
-    if (!validate_json_tree(child, depth + 1, error, object_index)) {
+    if (!validate_json_tree(child, root, source, depth + 1, error, error_offset,
+                            object_index)) {
       return false;
     }
   }
   std::sort(keys.begin(), keys.end());
-  if (std::adjacent_find(keys.begin(), keys.end()) != keys.end()) {
+  const auto duplicate = std::adjacent_find(keys.begin(), keys.end());
+  if (duplicate != keys.end()) {
     error = "duplicate object key";
+    bool seen = false;
+    for (const JsonObjectEntry &entry : entries) {
+      const std::string_view key(yyjson_get_str(entry.first),
+                                 yyjson_get_len(entry.first));
+      if (key != *duplicate) {
+        continue;
+      }
+      if (seen) {
+        error_offset = json_value_offset(source, root, entry.first);
+        break;
+      }
+      seen = true;
+    }
     return false;
   }
   object_index.emplace(value, std::move(entries));
@@ -80,7 +96,8 @@ struct JsonDocument {
       error_offset = parse_error.pos;
       return;
     }
-    if (!validate_json_tree(yyjson_doc_get_root(document), 0, error,
+    yyjson_val *root = yyjson_doc_get_root(document);
+    if (!validate_json_tree(root, root, source, 0, error, error_offset,
                             object_index)) {
       yyjson_doc_free(document);
       document = nullptr;

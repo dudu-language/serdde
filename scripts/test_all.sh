@@ -13,6 +13,9 @@ for target in "${targets[@]}"; do
     dudu run "$target" --quiet
 done
 
+printf '==> CBOR interoperability\n'
+./scripts/test_cbor_interop.sh
+
 printf '==> compile-fail diagnostics\n'
 ./scripts/test_compile_fail.sh
 
@@ -23,3 +26,9 @@ printf '==> examples\n'
 for example in examples/*.dd; do
     dudu run "$example" --quiet >/dev/null
 done
+
+printf '==> clean path package consumer\n'
+./scripts/test_package_consumers.sh
+
+printf '==> standalone CMake build\n'
+./scripts/test_cmake.sh

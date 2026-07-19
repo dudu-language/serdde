@@ -1,5 +1,6 @@
 #pragma once
 
+#include "benchmark_fixture_json.hpp"
 #include "benchmark_schemas.hpp"
 
 #include <chrono>
@@ -54,9 +55,20 @@ int run_typed_case(const T &value, const std::string &workload,
                    const std::string &format, const std::string &operation,
                    std::int32_t count) {
   std::string source;
-  if (!Backend::encode(value, format, source)) {
+  const bool prepared = format == "json" && operation == "decode"
+                            ? benchmark_json(value, source)
+                            : Backend::encode(value, format, source);
+  if (!prepared) {
     std::cerr << "initial encode failed\n";
     return 2;
+  }
+  if (operation == "encode") {
+    T verified{};
+    if (!Backend::decode(source, format, verified) ||
+        checksum(verified) != checksum(value)) {
+      std::cerr << "initial round-trip verification failed\n";
+      return 2;
+    }
   }
 
   reset_allocations();

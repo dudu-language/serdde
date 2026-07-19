@@ -12,13 +12,30 @@ if(NOT EXISTS "${GLAZE_INCLUDE_DIR}/glaze/glaze.hpp")
   message(FATAL_ERROR "Set GLAZE_INCLUDE_DIR to Glaze's include directory")
 endif()
 
+set(SIMDJSON_DIR "" CACHE PATH "Path to the simdjson source tree")
+if(NOT EXISTS "${SIMDJSON_DIR}/src/simdjson.cpp")
+  message(FATAL_ERROR "Set SIMDJSON_DIR to simdjson's source directory")
+endif()
+
+set(RAPIDJSON_INCLUDE_DIR "" CACHE PATH "Path containing rapidjson/reader.h")
+if(NOT EXISTS "${RAPIDJSON_INCLUDE_DIR}/rapidjson/reader.h")
+  message(FATAL_ERROR "Set RAPIDJSON_INCLUDE_DIR to RapidJSON's include directory")
+endif()
+
 set(YYJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/yyjson")
 add_library(benchmark_yyjson_c STATIC "${YYJSON_DIR}/yyjson.c")
 target_include_directories(benchmark_yyjson_c PUBLIC "${YYJSON_DIR}")
 target_compile_options(benchmark_yyjson_c PRIVATE -O3 -DNDEBUG)
 
-add_library(benchmark_support OBJECT benchmark_alloc.cpp)
+add_library(benchmark_support OBJECT benchmark_alloc.cpp benchmark_fixture_json.cpp)
 target_compile_options(benchmark_support PRIVATE -O3 -DNDEBUG)
+
+add_library(benchmark_simdjson_lib STATIC "${SIMDJSON_DIR}/src/simdjson.cpp")
+target_include_directories(benchmark_simdjson_lib
+  PUBLIC "${SIMDJSON_DIR}/include"
+  PRIVATE "${SIMDJSON_DIR}/src"
+)
+target_compile_options(benchmark_simdjson_lib PRIVATE -O3 -DNDEBUG)
 
 function(configure_benchmark target)
   target_sources(${target} PRIVATE $<TARGET_OBJECTS:benchmark_support>)
@@ -45,3 +62,12 @@ configure_benchmark(benchmark_glaze)
 add_executable(benchmark_yyjson yyjson_backend.cpp yyjson_codec.cpp)
 target_link_libraries(benchmark_yyjson PRIVATE benchmark_yyjson_c)
 configure_benchmark(benchmark_yyjson)
+
+add_executable(benchmark_simdjson simdjson_backend.cpp simdjson_codec.cpp)
+target_link_libraries(benchmark_simdjson PRIVATE benchmark_simdjson_lib)
+configure_benchmark(benchmark_simdjson)
+
+add_executable(benchmark_rapidjson rapidjson_backend.cpp rapidjson_decode.cpp
+               rapidjson_encode.cpp)
+target_include_directories(benchmark_rapidjson PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
+configure_benchmark(benchmark_rapidjson)

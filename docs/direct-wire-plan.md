@@ -1,8 +1,10 @@
-# Direct Wire And Binary Plan
+# Direct Wire Architecture And Delivery Record
 
-This plan moves Serdde from a mandatory recursive `Value` tree to direct typed
-serialization and deserialization. It also adds a production JSON backend and
-a deterministic CBOR backend without coupling derives to either format.
+This document defines the completed direct-wire architecture and retains the
+delivery requirements used to audit it. Serdde moved from a mandatory
+recursive `Value` tree to direct typed serialization and deserialization,
+added a measured native JSON backend, and added deterministic CBOR without
+coupling derives to a format.
 
 The work is complete only when normal typed JSON, CBOR, and DSON operations no
 longer allocate or traverse an intermediate `Value` tree. `Value` remains a
@@ -171,9 +173,9 @@ most useful candidate errors without unbounded reparsing.
 ### Adapters
 
 Adapters receive a serializer or deserializer and participate in the direct
-path. The current `Value` adapter API may be replaced because there is no
-stable release to preserve. An explicit adapter that intentionally requests a
-dynamic `Value` is allowed and pays that cost only for its own subtree.
+path. Direct adapters receive the active writer or reader. An explicit adapter
+that intentionally requests a dynamic `Value` is allowed and pays that cost
+only for its own subtree.
 
 ### Conditional Fields
 
@@ -281,7 +283,8 @@ independent implementation. Deterministic golden bytes are checked into tests.
 - Select and document the native reader/writer architecture.
 - Integrate dependencies through normal CMake/package configuration.
 - Implement direct `dumps`, `loads`, reusable-buffer, and writer APIs.
-- Preserve `dumps_value` and dynamic `loads` through the `Value` backend.
+- Preserve explicit `dumps_value` and `loads_value` operations in each
+  format's `*_value` module.
 - Run JSON conformance and malformed-input suites.
 - Delete the old typed parse-to-Value-to-type and
   type-to-Value-to-write paths.
@@ -343,8 +346,13 @@ independent implementation. Deterministic golden bytes are checked into tests.
 ### 11. Validate As A Package
 
 - Consume Serdde through path and pinned Git dependencies from clean projects.
+- Run `scripts/test_package_consumers.sh` for the clean path consumer and
+  `scripts/test_package_consumers.sh --git-ref REV` for an exact published
+  commit or tag.
 - Run default tests, examples, compile-fail fixtures, generated-code checks,
   conformance suites, and release benchmarks locally.
+- Build and execute the root `CMakeLists.txt` from a clean temporary build
+  directory with `scripts/test_cmake.sh`.
 - Run relevant Dudu regressions for any general compiler fixes.
 - Commit and push stable green milestones rather than one unreviewable final
   rewrite.
@@ -363,5 +371,4 @@ independent implementation. Deterministic golden bytes are checked into tests.
 - Benchmarks report allocations and memory, not only elapsed time.
 - Equivalent Rust Serde JSON and CBOR benchmarks are checked in and reproducible.
 - No Serdde or native-library special cases exist in the Dudu compiler.
-- Documentation describes the implemented architecture without "later" or
-  temporary-path language.
+- Documentation describes the implemented architecture directly.

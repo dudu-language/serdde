@@ -87,3 +87,26 @@ becomes part of decoding behavior.
 `flatten=True` merges a nested object into its parent. Flattening is useful for
 schema composition but creates one shared key space. Serdde rejects duplicate
 keys during encoding and invalid combinations during macro expansion.
+
+## CBOR Field Identity
+
+The default CBOR representation uses serialized field names and therefore
+follows the rename, alias, default, and unknown-field rules above.
+
+Compact CBOR uses explicit IDs:
+
+```python
+@derive(Serde)
+@Serde(compact=True)
+class Player:
+    @Serde(id=1)
+    name: str
+
+    @Serde(id=2)
+    hp: i32
+```
+
+Reordering fields does not alter deterministic bytes. New fields receive new
+IDs; removed IDs should remain reserved by the schema and must not be silently
+reused for a different meaning. A decoder accepts the primary field ID and
+configured name aliases according to the compact schema rules.

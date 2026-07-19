@@ -1,139 +1,133 @@
 # Serdde Architecture
 
-Serdde separates typed conversion from wire formats. The current implementation
-uses `Value` as its common conversion layer. The target architecture replaces
-that mandatory tree with direct serializer and deserializer protocols; the
-complete migration is specified in [Direct Wire And Binary Plan](direct-wire-plan.md).
+Serdde derives target format-neutral serializer and deserializer protocols.
+Formats and dynamic trees are peer backends.
 
-## Layers
-
-1. `serdde.value` defines the recursive, format-neutral `Value` model.
-2. Derived and handwritten codecs convert Dudu values to and from `Value`.
-3. Format modules parse and write `Value` without knowing user types.
-4. Convenience APIs compose a typed codec with a format.
-
-This is the current implementation structure, not the permanent dependency
-direction. After the direct-wire migration, generated codecs target structured
-format-neutral protocols. JSON, CBOR, DSON, and `Value` implement those
-protocols as peer backends. `Value` remains available for callers that
-intentionally need dynamic data, but typed `dumps` and `loads` do not traverse
-it.
-
-JSON is not embedded in generated derives. Adding a format does not require a
-new derive.
-
-## Public API
-
-`@derive(Serialize)` adds:
-
-```python
-def serdde_serialize(self: &const[Self]) -> Result[Value, SerddeError]
+```text
+derived or handwritten typed codec
+              |
+              v
+serializer / deserializer protocol
+       |          |          |          |
+       v          v          v          v
+     JSON        CBOR       DSON      Value
 ```
 
-`@derive(Deserialize)` adds:
+Typed JSON, CBOR, and DSON calls do not invoke `to_value`, `from_value`, a
+`Value` parser, or a `Value` writer. The typed format modules contain no
+`Value` imports. Generated-source tests reject a derive expansion that names
+the dynamic backend.
 
-```python
-def serdde_deserialize(value: &const[Value]) -> Result[Self, SerddeError]
-```
+## Protocol
 
-The method has no `self` parameter and is therefore a static Dudu method.
-`@derive(Serde)` adds both methods.
+`serdde.protocol` provides generic operations for:
 
-The generic entry points use ordinary Dudu use-site requirements:
+- null, bool, char, signed and unsigned integers, floats, and strings;
+- lists, sets, fixed arrays, and string-keyed dictionaries;
+- `Option`, `Result`, and `variant`;
+- sequence and object boundaries;
+- fields, field IDs, aliases, defaults, and unknown-field policy;
+- classes, recursive classes, and all enum representations;
+- direct field and standalone adapters.
 
-```python
-def to_value[T](value: &const[T]) -> Result[Value, SerddeError]:
-    return value.serdde_serialize()
-
-
-def from_value[T](value: &const[Value]) -> Result[T, SerddeError]:
-    return T.serdde_deserialize(value)
-```
-
-Concrete generic instantiations are checked by Dudu. A type without the
-required method receives a Dudu diagnostic at the call site.
+Dispatch is static generic dispatch. Scalars and fields do not pay for a
+virtual interface. A backend reader presents immutable child readers, so an
+untagged enum can retry a bounded encoded subtree without materializing a
+dynamic tree.
 
 ## Generated Code
 
-Derives generate typed code for each field and variant. Primitive conversion
-uses explicit library functions. User-defined values call their derived or
-handwritten methods. Container conversion emits ordinary loops and recursively
-applies the same rules to element types.
+`@derive(Serialize)` emits field counting, normal-order field writing,
+canonical-order field writing, and object serialization. Conditional fields
+and flattened objects contribute to the final definite object size before a
+CBOR map is opened.
 
-This avoids:
+`@derive(Deserialize)` emits field lookup, duplicate-alias detection, checked
+typed decoding, defaults, unknown-field handling, and one final constructor
+call. Nested errors add field or index path segments while returning.
 
-- runtime reflection;
-- compiler special cases for Serdde;
-- C++ return-type overload tricks;
-- a dynamically typed `any` boundary;
-- format-specific generated code.
+The macro imports only neutral defaults, errors, protocols, and variant
+support. It does not import `serdde.convert` or a format implementation.
 
-Generated code is inspectable with `duc expand` and participates in normal
-diagnostics, LSP navigation, and C++ emission.
+Generated declarations are ordinary Dudu AST nodes. They participate in
+semantic analysis, source diagnostics, LSP navigation, and C++ emission. There
+is no source-string macro output or compiler registry.
 
-## Data Model
+## JSON
 
-`Value` has these kinds:
+The JSON reader uses yyjson behind `JsonReader`. yyjson validates and indexes
+the document; Serdde then decodes destination fields directly. Immediate
+object entries are indexed once, avoiding repeated linked-list traversal.
 
-- null;
-- bool;
-- signed integer;
-- unsigned integer;
-- float;
-- UTF-8 string;
-- sequence;
-- ordered string-keyed object.
+The JSON writer is a direct writer over a caller-owned or internal string. It
+does not construct a native or Serdde DOM. It validates UTF-8, escapes strings,
+uses locale-independent numeric conversion, and rejects non-finite floats.
 
-The model preserves integer sign and width category well enough for checked
-typed conversion. A format may reject values it cannot represent.
+Backend selection uses the complete typed benchmark matrix. yyjson is the
+production reader because its compact C integration, checked numeric access,
+and indexed object model performed well without exposing backend types. The
+production writer stays as a small inline native boundary because wrapping a
+streaming writer behind one out-of-line call per protocol event erased much of
+that writer's standalone advantage. The direct writer was retained only after
+measuring complete typed Serdde operations. RapidJSON SAX, simdjson On-Demand,
+yyjson, Glaze, and nlohmann/json remain checked-in comparison implementations,
+so this decision can be repeated rather than assumed.
 
-Objects preserve insertion order for deterministic output. Lookup uses a map;
-ordering uses a parallel key list. Duplicate keys are rejected by parsers.
+Public errors convert native parse failures into `SerddeError` with JSON byte
+offset, line, and column. Backend-specific types do not appear in public Dudu
+signatures.
 
-## Errors
+## CBOR
 
-Every error has:
+The CBOR backend is a narrowly scoped RFC 8949 reader/writer. Its indexed wire
+document is not a public dynamic data model and is not copied into `Value` for
+typed operations.
 
-- a stable `ErrorKind`;
-- a message;
-- a typed path made of field and index segments;
-- optional byte offset, line, and column;
-- optional format name and source cause.
+Default class representation is a deterministic map keyed by serialized field
+names. Keys use RFC 8949 deterministic ordering. Compact classes use explicit
+non-negative integer field IDs. Declaration position, hashes, C++ layout, and
+ABI details never define the wire schema.
 
-Nested conversion prepends path segments while an error returns to the caller.
-JSON syntax errors report one-based line and column positions.
+The implementation is validated with golden RFC-style vectors and bidirectional
+interoperability against Rust `ciborium`.
 
-## Supported Type Families
+## DSON
 
-The completed derives cover:
+DSON is deterministic typed text. It visibly distinguishes signed integers,
+unsigned integers, and floats, which makes it useful for debugging protocol
+behavior. Its reader and writer implement the same direct protocol as JSON and
+CBOR.
 
-- scalar Dudu types and strings;
-- classes and generic classes;
-- unit and named-payload enums;
-- nested and recursive models;
-- `list`, `dict`, `set`, and fixed arrays;
-- `Option`, `Result`, and `variant`;
-- fields containing another derived or handwritten Serdde type.
+## Value
 
-Raw pointers and references are not serialized implicitly. A type may provide a
-handwritten codec when ownership or external identity has a domain-specific
-meaning.
+`serdde.value` is an optional recursive dynamic model. `ValueWriter` and
+`ValueReader` implement the ordinary protocol. `to_value` and `from_value` are
+therefore explicit backend calls, not the machinery behind typed wire APIs.
 
-## Formats
+Dynamic wire modules are also explicit:
 
-JSON is standards-compliant and tested against external conformance data.
-DSON is a deterministic typed text format used to prove that derives are not
-coupled to JSON. DSON preserves every `Value` kind exactly.
+- `serdde.json_value`;
+- `serdde.cbor_value`;
+- `serdde.dson_value`.
+
+## Allocation Contract
+
+Typed encoding allocates no recursive `Value`, object-key dictionary, or
+per-field dynamic node. An internal or caller-provided output string may grow.
+
+Typed decoding allocates destination-owned strings and containers as required.
+JSON's native parser arena and backend wire indexes are measured separately;
+there is no second owned copy of the complete input and no Serdde `Value`
+tree. Borrowed destination strings are not implied by `loads[T]`.
 
 ## Native Boundary
 
-Serdde is implemented in Dudu. Native libraries may be used for optional
-adapters and benchmark comparisons, but the compiler must not recognize the
-library name or its types. A discovered language gap is reproduced with a
-neutral Dudu fixture and fixed generally in Dudu.
+Native libraries stay behind reader/writer headers and normal Dudu import/build
+configuration. Serdde-specific behavior is never added to Dudu. Compiler bugs
+found while implementing Serdde receive neutral compiler fixtures and general
+fixes.
 
-External types use explicit adapter classes. Field adapters are selected with
-`@Serde(adapter="...")`; standalone values use `to_value_with` and
-`from_value_with`. This proved sufficient for imported C++ templates including
-`std.pair` without adding traits, compiler registries, orphan rules, or
-Serdde-specific lookup to Dudu.
+The root `CMakeLists.txt`, clean path/Git consumers, and Dudu manifest all use
+the same native inputs: the private Serdde headers and vendored yyjson C source.
+This verifies that the backend works both from the repository and through
+transitive package configuration.

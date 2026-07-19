@@ -204,6 +204,28 @@ def main() -> i32:
             if error.line != 4 or error.format != "json":
                 return fail("typed conversion location", 34)
 
+    typed_malformed = loads[JsonRecord]("{\"name\":\"Ada\",}")
+    if typed_malformed.ok or typed_malformed.err.format != "json":
+        return fail("typed malformed input", 44)
+    if typed_malformed.err.offset == 0:
+        return fail("typed malformed location", 45)
+
+    typed_duplicate = loads[JsonRecord](
+        "{\"name\":\"Ada\",\"name\":\"Grace\",\"active\":true,\"address\":{\"city\":\"London\",\"postal_code\":42},\"scores\":[]}",
+    )
+    if typed_duplicate.ok or typed_duplicate.err.format != "json":
+        return fail("typed duplicate key", 46)
+    if typed_duplicate.err.offset == 0:
+        return fail("typed duplicate location", 47)
+
+    typed_invalid_utf8 = dumps(serdde_json_test.invalid_utf8())
+    if typed_invalid_utf8.ok or typed_invalid_utf8.err.format != "json":
+        return fail("typed invalid UTF-8 write", 48)
+
+    typed_nonfinite = dumps(serdde_json_test.infinity())
+    if typed_nonfinite.ok or typed_nonfinite.err.format != "json":
+        return fail("typed non-finite write", 49)
+
     record = JsonRecord(
         name="Ada",
         active=True,

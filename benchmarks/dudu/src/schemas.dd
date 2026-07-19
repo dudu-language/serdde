@@ -9,6 +9,9 @@ class SmallRecord:
     scores: list[i32]
     metadata: dict[str, str]
 
+    def checksum(self) -> u64:
+        return self.id + u64(len(self.name)) + u64(len(self.scores)) + u64(len(self.metadata)) + u64(self.active)
+
 
 @derive(Serde)
 class NestedLeaf:
@@ -35,20 +38,34 @@ class NestedLevel2:
 class NestedRecord:
     child: NestedLevel2
 
+    def checksum(self) -> u64:
+        return u64(self.child.child.child.child.value) + u64(len(self.child.child.child.child.label))
+
 
 @derive(Serde)
 class StringRecord:
     payload: str
+
+    def checksum(self) -> u64:
+        return u64(len(self.payload))
 
 
 @derive(Serde)
 class ArrayRecord:
     values: list[i64]
 
+    def checksum(self) -> u64:
+        if len(self.values) == 0:
+            return 0
+        return u64(len(self.values)) + u64(self.values[len(self.values) - 1])
+
 
 @derive(Serde)
 class MapRecord:
     values: dict[str, i64]
+
+    def checksum(self) -> u64:
+        return u64(len(self.values)) + u64(self.values.at("key_511"))
 
 
 @derive(Serde)
@@ -66,3 +83,11 @@ class EventRecord:
     sequence: u64
     event: BenchEvent
 
+    def checksum(self) -> u64:
+        match self.event:
+            case BenchEvent.Quit:
+                return self.sequence
+            case BenchEvent.KeyDown(key):
+                return self.sequence + u64(key)
+            case BenchEvent.MouseMove(x, y):
+                return self.sequence + u64(x + y)

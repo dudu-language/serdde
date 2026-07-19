@@ -79,6 +79,12 @@ def fail(name: str, code: i32) -> i32:
 
 
 def test_direct_features() -> i32:
+    malformed = loads[DsonRecord]("obj(1:{str(2:id)=u64(7),})")
+    if malformed.ok or malformed.err.format != "dson":
+        return fail("direct malformed input", 14)
+    if malformed.err.offset == 0:
+        return fail("direct malformed location", 15)
+
     flattened = DsonFlattened(id=3, address=DsonAddress(city="Paris"))
     flattened_text = dumps(flattened)
     if not flattened_text.ok:

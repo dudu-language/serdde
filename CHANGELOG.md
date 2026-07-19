@@ -8,13 +8,31 @@ All notable changes to Serdde are recorded here. The format follows
 
 ### Added
 
-- Format-neutral `Value` representation with ordered objects.
+- Format-neutral direct serializer and deserializer protocols. Typed JSON,
+  CBOR, and DSON operations no longer construct an intermediate `Value` tree.
+- Explicit dynamic wire modules: `serdde.json_value`, `serdde.cbor_value`, and
+  `serdde.dson_value`.
+- Direct standalone adapter APIs for every wire format, including reusable
+  output buffers.
+- Deterministic RFC 8949 CBOR with name-keyed maps, explicit compact field IDs,
+  schema-evolution fixtures, golden bytes, and Rust `ciborium`
+  interoperability.
+- yyjson-backed typed JSON reading and a direct JSON writer behind private
+  backend boundaries.
+- Reproducible JSON and CBOR benchmarks covering Serdde direct, the explicit
+  `Value` baseline, Rust Serde, yyjson, simdjson On-Demand, RapidJSON SAX,
+  nlohmann/json, and Glaze, including latency, throughput, allocation, memory,
+  wire-size, artifact-size, and compilation measurements.
+- Clean path and pinned-Git package consumers plus a standalone CMake build
+  gate that exercise transitive native source and include configuration.
+
+- Optional format-neutral `Value` representation with ordered objects.
 - Structured errors with value paths and source locations.
-- Strict JSON parsing and deterministic JSON writing.
+- Strict dynamic JSON parsing and deterministic dynamic JSON writing.
 - Typed JSON `loads[T]` and `dumps[T]`, exact numeric boundaries, UTF-8
   validation, nesting limits, and source-aware conversion errors.
-- DSON, a deterministic typed text format that preserves every `ValueKind` and
-  proves derived codecs are independent of JSON.
+- DSON, a deterministic typed text format that preserves every `ValueKind` in
+  dynamic mode and directly implements typed protocols.
 - Explicit field and top-level adapters for imported and third-party types,
   validated with an imported C++ `std.pair`.
 - Checked primitive conversion and generic handwritten codec contracts.

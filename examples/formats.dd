@@ -1,3 +1,5 @@
+from serdde.cbor import dumps as dumps_cbor
+from serdde.cbor import loads as loads_cbor
 from serdde.dson import dumps as dumps_dson
 from serdde.dson import loads as loads_dson
 from serdde.json import dumps as dumps_json
@@ -13,6 +15,7 @@ class Point:
 
 def main() -> i32:
     point = Point(x=1.25, y=-4.5)
+    cbor = dumps_cbor(point)
     json = dumps_json(point)
     dson = dumps_dson(point)
     match json:
@@ -31,4 +34,12 @@ def main() -> i32:
             restored = loads_dson[Point](text)
             if not restored.ok:
                 return 4
+    match cbor:
+        case Err(_):
+            return 5
+        case Ok(bytes):
+            print("CBOR bytes: " + str(len(bytes)))
+            restored = loads_cbor[Point](bytes)
+            if not restored.ok:
+                return 6
     return 0

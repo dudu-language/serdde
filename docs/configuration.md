@@ -49,10 +49,15 @@ registrations. An explicit adapter can own their wire representation:
 
 ```python
 class PairSerde:
-    def serialize(value: &const[std.pair[std.string, i32]]) -> Result[Value, SerddeError]:
+    def serialize[Writer](
+        value: &const[std.pair[std.string, i32]],
+        output: &Writer,
+    ) -> Result[bool, SerddeError]:
         ...
 
-    def deserialize(value: &const[Value]) -> Result[std.pair[std.string, i32], SerddeError]:
+    def deserialize[Reader](
+        input: &const[Reader],
+    ) -> Result[std.pair[std.string, i32], SerddeError]:
         ...
 
 
@@ -62,10 +67,12 @@ class Entry:
     pair: std.pair[std.string, i32]
 ```
 
-Standalone values use `to_value_with[T, Adapter]` and
+Standalone wire values use a format's `dumps_with[T, Adapter]`,
+`loads_with[T, Adapter]`, and `dumps_into_with[T, Adapter]`. Explicit dynamic
+conversion uses `to_value_with[T, Adapter]` and
 `from_value_with[T, Adapter]`. Adapter lookup is explicit, so two packages can
-provide different representations for the same imported type without creating
-an import-order-dependent global conformance rule.
+provide different representations for one imported type without an
+import-order-dependent global conformance rule.
 
 ## Schema Evolution
 

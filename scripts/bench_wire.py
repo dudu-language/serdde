@@ -26,6 +26,14 @@ GLAZE_DIR = BUILD / "deps" / "glaze"
 GLAZE_REPOSITORY = "https://github.com/stephenberry/glaze.git"
 GLAZE_VERSION = "v7.9.1"
 GLAZE_COMMIT = "cadcadea26554cc4214769e358f981426e40a02a"
+SIMDJSON_DIR = BUILD / "deps" / "simdjson"
+SIMDJSON_REPOSITORY = "https://github.com/simdjson/simdjson.git"
+SIMDJSON_VERSION = "v4.6.4"
+SIMDJSON_COMMIT = "1bcf71bd85059ab6574ea1159de9298dcc1212c5"
+RAPIDJSON_DIR = BUILD / "deps" / "rapidjson"
+RAPIDJSON_REPOSITORY = "https://github.com/Tencent/rapidjson.git"
+RAPIDJSON_VERSION = "master-2026-06-01"
+RAPIDJSON_COMMIT = "24b5e7a8b27f42fa16b96fc70aade9106cf7102f"
 CPP_BUILD = BUILD / "cpp"
 RUST_TARGET = BUILD / "rust"
 DUDU_PROJECT = ROOT / "benchmarks" / "dudu"
@@ -51,6 +59,7 @@ class Implementation:
     binary: Path
     formats: tuple[str, ...]
     implementation_env: str | None = None
+    operations: tuple[str, ...] = ("encode", "decode")
 
 
 def implementations() -> tuple[Implementation, ...]:
@@ -59,6 +68,9 @@ def implementations() -> tuple[Implementation, ...]:
         Implementation("Serdde Value", DUDU_BINARY, FORMATS, "serdde-value"),
         Implementation("Rust Serde", RUST_BINARY, FORMATS),
         Implementation("yyjson", CPP_BUILD / "benchmark_yyjson", ("json",)),
+        Implementation("simdjson On-Demand", CPP_BUILD / "benchmark_simdjson",
+                       ("json",), operations=("decode",)),
+        Implementation("RapidJSON SAX", CPP_BUILD / "benchmark_rapidjson", ("json",)),
         Implementation("nlohmann/json", CPP_BUILD / "benchmark_nlohmann", FORMATS),
         Implementation("Glaze", CPP_BUILD / "benchmark_glaze", FORMATS),
     )
@@ -77,24 +89,36 @@ def run(command: list[str], cwd: Path = ROOT, quiet: bool = False,
     subprocess.run(command, **kwargs)
 
 
-def ensure_glaze() -> None:
-    if (GLAZE_DIR / ".git").is_dir():
-        current = command_output(["git", "rev-parse", "HEAD"], GLAZE_DIR)
-        if current == GLAZE_COMMIT:
+def ensure_checkout(directory: Path, repository: str, commit: str) -> None:
+    if (directory / ".git").is_dir():
+        current = command_output(["git", "rev-parse", "HEAD"], directory)
+        if current == commit:
             return
-        shutil.rmtree(GLAZE_DIR)
-    GLAZE_DIR.parent.mkdir(parents=True, exist_ok=True)
-    run(["git", "clone", "--filter=blob:none", "--no-checkout", GLAZE_REPOSITORY,
-         str(GLAZE_DIR)])
-    run(["git", "fetch", "--depth=1", "origin", GLAZE_COMMIT], GLAZE_DIR)
-    run(["git", "checkout", "--detach", GLAZE_COMMIT], GLAZE_DIR)
+        shutil.rmtree(directory)
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "clone", "--filter=blob:none", "--no-checkout", repository,
+         str(directory)])
+    run(["git", "fetch", "--depth=1", "origin", commit], directory)
+    run(["git", "checkout", "--detach", commit], directory)
+
+
+def ensure_native_dependencies() -> None:
+    ensure_checkout(GLAZE_DIR, GLAZE_REPOSITORY, GLAZE_COMMIT)
+    ensure_checkout(SIMDJSON_DIR, SIMDJSON_REPOSITORY, SIMDJSON_COMMIT)
+    ensure_checkout(RAPIDJSON_DIR, RAPIDJSON_REPOSITORY, RAPIDJSON_COMMIT)
+
+
+def cpp_configure_command() -> list[str]:
+    return ["cmake", "-S", str(ROOT / "benchmarks/cpp"), "-B", str(CPP_BUILD),
+            "-DCMAKE_BUILD_TYPE=Release", f"-DGLAZE_INCLUDE_DIR={GLAZE_DIR}/include",
+            f"-DSIMDJSON_DIR={SIMDJSON_DIR}",
+            f"-DRAPIDJSON_INCLUDE_DIR={RAPIDJSON_DIR}/include"]
 
 
 def build_all() -> None:
-    ensure_glaze()
+    ensure_native_dependencies()
     run([os.environ.get("DUDU", "dudu"), "build", "--quiet"], DUDU_PROJECT)
-    run(["cmake", "-S", str(ROOT / "benchmarks/cpp"), "-B", str(CPP_BUILD),
-         "-DCMAKE_BUILD_TYPE=Release", f"-DGLAZE_INCLUDE_DIR={GLAZE_DIR}/include"])
+    run(cpp_configure_command())
     run(["cmake", "--build", str(CPP_BUILD), "--parallel"])
     rust_env = os.environ.copy()
     rust_env["CARGO_TARGET_DIR"] = str(RUST_TARGET)
@@ -177,7 +201,7 @@ def runtime_matrix(repetitions: int, selected_formats: tuple[str, ...],
             if wire_format not in implementation.formats:
                 continue
             for workload in WORKLOADS:
-                operations = ("decode",) if workload == "malformed" else ("encode", "decode")
+                operations = ("decode",) if workload == "malformed" else implementation.operations
                 for operation in operations:
                     description = f"{implementation.label}: {wire_format}/{workload}/{operation}"
                     print(description, flush=True)
@@ -213,7 +237,7 @@ def timed_command(command: list[str], cwd: Path, env: dict[str, str] | None = No
 
 
 def compile_matrix() -> list[dict[str, Any]]:
-    ensure_glaze()
+    ensure_native_dependencies()
     rows: list[dict[str, Any]] = []
 
     run([os.environ.get("DUDU", "dudu"), "clean"], DUDU_PROJECT, quiet=True)
@@ -225,10 +249,10 @@ def compile_matrix() -> list[dict[str, Any]]:
 
     if CPP_BUILD.exists():
         shutil.rmtree(CPP_BUILD)
-    configure = ["cmake", "-S", str(ROOT / "benchmarks/cpp"), "-B", str(CPP_BUILD),
-                 "-DCMAKE_BUILD_TYPE=Release", f"-DGLAZE_INCLUDE_DIR={GLAZE_DIR}/include"]
-    run(configure, quiet=True)
+    run(cpp_configure_command(), quiet=True)
     for target, label in (("benchmark_yyjson", "yyjson"),
+                          ("benchmark_simdjson", "simdjson On-Demand"),
+                          ("benchmark_rapidjson", "RapidJSON SAX"),
                           ("benchmark_nlohmann", "nlohmann/json"),
                           ("benchmark_glaze", "Glaze")):
         run(["cmake", "--build", str(CPP_BUILD), "--target", "clean"], quiet=True)
@@ -289,6 +313,10 @@ def machine_details() -> dict[str, Any]:
         "dudu_commit": command_output(["git", "rev-parse", "HEAD"], ROOT.parent / "dudu"),
         "glaze_version": GLAZE_VERSION,
         "glaze_commit": GLAZE_COMMIT,
+        "simdjson_version": SIMDJSON_VERSION,
+        "simdjson_commit": SIMDJSON_COMMIT,
+        "rapidjson_version": RAPIDJSON_VERSION,
+        "rapidjson_commit": RAPIDJSON_COMMIT,
         "serde_version": "1.0.228",
         "serde_json_version": "1.0.150",
         "ciborium_version": "0.2.2",
@@ -325,12 +353,15 @@ def markdown_report(metadata: dict[str, Any], summary: list[dict[str, Any]],
     lines = [
         "# Direct-Wire Benchmarks", "",
         "This suite compares equivalent typed schemas and operations. Serdde direct, Serdde's optional `Value`",
-        "backend, Rust Serde, yyjson, nlohmann/json, and Glaze are measured in separate processes.", "",
+        "backend, Rust Serde, yyjson, simdjson On-Demand, RapidJSON SAX, nlohmann/json, and Glaze",
+        "are measured in separate processes. simdjson is decode-only because it does not provide a JSON writer.", "",
         "## Environment", "",
         f"- Machine: {metadata['cpu']}, {metadata['logical_cpus']} logical CPUs, {metadata['memory_gib']} GiB RAM",
         f"- OS: {metadata['distribution']}", f"- C++: {metadata['cxx']}", f"- Rust: {metadata['rustc']}",
         f"- Dudu: {metadata['dudu']}", f"- Optimization: {metadata['optimization']}",
         f"- Glaze: {metadata['glaze_version']} (`{metadata['glaze_commit']}`)",
+        f"- simdjson: {metadata['simdjson_version']} (`{metadata['simdjson_commit']}`)",
+        f"- RapidJSON: {metadata['rapidjson_version']} (`{metadata['rapidjson_commit']}`)",
         f"- serde / serde_json / ciborium: {metadata['serde_version']} / {metadata['serde_json_version']} / {metadata['ciborium_version']}",
         f"- nlohmann/json / yyjson: {metadata['nlohmann_json_version']} / {metadata['yyjson_version']}", "",
         "Runtime values are medians of independent process runs after one calibration run. Each case is calibrated",
@@ -372,8 +403,9 @@ def markdown_report(metadata: dict[str, Any], summary: list[dict[str, Any]],
     for row in artifacts:
         lines.append(f"| {row['implementation']} | {row['binary_bytes']} | {row.get('lines', '')} |")
     lines += ["", "## Reproduce", "", "```bash", "./scripts/bench_wire.sh --all --publish", "```", "",
-              "The runner fetches the pinned Glaze commit into ignored build storage. Rust dependencies are fixed by",
-              "`benchmarks/rust/Cargo.lock`; yyjson is vendored; system nlohmann/json is version-checked by CMake.", ""]
+              "The runner fetches pinned Glaze, simdjson, and RapidJSON commits into ignored build storage. Rust",
+              "dependencies are fixed by `benchmarks/rust/Cargo.lock`; yyjson is vendored; system nlohmann/json is",
+              "version-checked by CMake.", ""]
     return "\n".join(lines)
 
 
@@ -401,16 +433,25 @@ def main() -> int:
     if args.smoke or run_runtime:
         build_all()
     else:
-        ensure_glaze()
+        ensure_native_dependencies()
     if args.smoke:
+        expected_checksums: dict[tuple[str, str], int] = {}
         for wire_format in selected_formats:
             for implementation in implementations():
                 if wire_format not in implementation.formats:
                     continue
                 for workload in WORKLOADS:
-                    operations = ("decode",) if workload == "malformed" else ("encode", "decode")
+                    operations = ("decode",) if workload == "malformed" else implementation.operations
                     for operation in operations:
-                        measured_process(implementation, wire_format, workload, operation, 1)
+                        metrics = measured_process(
+                            implementation, wire_format, workload, operation, 1)
+                        if operation == "decode":
+                            key = (wire_format, workload)
+                            expected = expected_checksums.setdefault(key, metrics["checksum"])
+                            if metrics["checksum"] != expected:
+                                raise RuntimeError(
+                                    f"{implementation.label} decoded {key} to checksum "
+                                    f"{metrics['checksum']}, expected {expected}")
         print("All benchmark smoke cases passed")
         return 0
 

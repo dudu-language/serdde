@@ -1,0 +1,40 @@
+from serdde.cbor import dumps as dumps_cbor
+from serdde.cbor import loads as loads_cbor
+from serdde.json import dumps as dumps_json
+from serdde.json import loads as loads_json
+from serdde.macros import Serde
+
+
+@derive(Serde)
+class PackageRecord:
+    id: u64
+    name: str
+    scores: list[i32]
+
+
+def valid(value: &const[PackageRecord]) -> bool:
+    return (
+        value.id == 7
+        and value.name == "Ada"
+        and len(value.scores) == 3
+        and value.scores[2] == 5
+    )
+
+
+def main() -> i32:
+    source = PackageRecord(id=7, name="Ada", scores=[2, 3, 5])
+
+    json = dumps_json(source)
+    if not json.ok:
+        return 1
+    json_record = loads_json[PackageRecord](json.value)
+    if not json_record.ok or not valid(json_record.value):
+        return 2
+
+    cbor = dumps_cbor(source)
+    if not cbor.ok:
+        return 3
+    cbor_record = loads_cbor[PackageRecord](cbor.value)
+    if not cbor_record.ok or not valid(cbor_record.value):
+        return 4
+    return 0

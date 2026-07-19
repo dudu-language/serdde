@@ -117,7 +117,7 @@ def run_case[T](value: &const[T], workload: str, default_iterations: i32) -> i32
                 print(decoded.err.message)
                 return 3
             serdde_benchmark.consume(decoded.value)
-            checksum += 1
+            checksum += decoded.value.checksum()
             i += 1
     else:
         while i < iterations:

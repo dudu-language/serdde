@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(serdde LANGUAGES CXX)
+project(serdde LANGUAGES C CXX)
 
 set(DUC_EXECUTABLE "" CACHE FILEPATH "Path to the duc compiler")
 if(NOT DUC_EXECUTABLE)
@@ -33,7 +33,18 @@ add_custom_command(
 )
 add_custom_target(dudu_generate DEPENDS "${DUDU_GENERATED_STAMP}")
 
-add_executable(serdde ${DUDU_GENERATED_SOURCES})
+add_executable(
+    serdde
+    ${DUDU_GENERATED_SOURCES}
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/yyjson/yyjson.c"
+)
 add_dependencies(serdde dudu_generate)
-target_include_directories(serdde PRIVATE "${DUDU_GENERATED_DIR}")
+target_include_directories(
+    serdde PRIVATE
+    "${DUDU_GENERATED_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/serdde"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/yyjson"
+)
+set_target_properties(serdde PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
 target_compile_features(serdde PRIVATE cxx_std_20)
